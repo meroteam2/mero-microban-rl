@@ -1,6 +1,7 @@
 """Microban tasks for MJLab.
 
-Importing this package registers the ``Microban-Stand``, ``Microban-Crawl``, ``Microban-Crawl-CPG``, ``Microban-Crawl-Arms`` and ``Microban-Crawl-Arms-2``
+Importing this package registers the ``Microban-Stand``, ``Microban-Crawl``,
+``Microban-Crawl-CPG``, ``Microban-Crawl-Arms``, ``Microban-Crawl-Arms-2``, ``Microban-GetUp``, ``Microban-GetUp-2``, ``Microban-GetUp-3``, ``Microban-GetUp-4`` and ``Microban-GetUp-5``
 tasks with MJLab.
 """
 
@@ -40,14 +41,12 @@ register_mjlab_task(
   rl_cfg=microban_stand_ppo_runner_cfg(),
 )
 
-
 register_mjlab_task(
   task_id="Microban-Crawl",
   env_cfg=microban_crawl_env_cfg(),
   play_env_cfg=microban_crawl_env_cfg(play=True),
   rl_cfg=microban_crawl_ppo_runner_cfg(),
 )
-
 
 register_mjlab_task(
   task_id="Microban-Crawl-CPG",
@@ -56,7 +55,6 @@ register_mjlab_task(
   rl_cfg=microban_crawl_cpg_ppo_runner_cfg(),
 )
 
-
 register_mjlab_task(
   task_id="Microban-Crawl-Arms",
   env_cfg=microban_crawl_arms_env_cfg(),
@@ -64,11 +62,70 @@ register_mjlab_task(
   rl_cfg=microban_crawl_arms_ppo_runner_cfg(),
 )
 
-
 register_mjlab_task(
   task_id="Microban-Crawl-Arms-2",
   env_cfg=microban_crawl_arms2_env_cfg(),
   play_env_cfg=microban_crawl_arms2_env_cfg(play=True),
   rl_cfg=microban_crawl_arms2_ppo_runner_cfg(),
   runner_cls=ArmNoiseRunner,
+)
+
+from microban_rl.getup_env_cfg import (  # noqa: E402
+  microban_getup_env_cfg,
+  microban_getup_ppo_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id="Microban-GetUp",
+  env_cfg=microban_getup_env_cfg(),
+  play_env_cfg=microban_getup_env_cfg(play=True),
+  rl_cfg=microban_getup_ppo_runner_cfg(),
+)
+
+from microban_rl.getup2_env_cfg import (  # noqa: E402
+  microban_getup2_env_cfg,
+  microban_getup2_ppo_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id="Microban-GetUp-2",
+  env_cfg=microban_getup2_env_cfg(),
+  play_env_cfg=microban_getup2_env_cfg(play=True),
+  rl_cfg=microban_getup2_ppo_runner_cfg(),
+)
+
+from microban_rl.getup3_env_cfg import (  # noqa: E402
+  microban_getup3_env_cfg,
+  microban_getup3_ppo_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id="Microban-GetUp-3",
+  env_cfg=microban_getup3_env_cfg(),
+  play_env_cfg=microban_getup3_env_cfg(play=True),
+  rl_cfg=microban_getup3_ppo_runner_cfg(),
+)
+
+from microban_rl.getup4_env_cfg import (  # noqa: E402
+  microban_getup4_env_cfg,
+  microban_getup4_ppo_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id="Microban-GetUp-4",
+  env_cfg=microban_getup4_env_cfg(),
+  play_env_cfg=microban_getup4_env_cfg(play=True),
+  rl_cfg=microban_getup4_ppo_runner_cfg(),
+)
+
+from microban_rl.getup5_env_cfg import (  # noqa: E402
+  microban_getup5_env_cfg,
+  microban_getup5_ppo_runner_cfg,
+)
+
+register_mjlab_task(
+  task_id="Microban-GetUp-5",
+  env_cfg=microban_getup5_env_cfg(),
+  play_env_cfg=microban_getup5_env_cfg(play=True),
+  rl_cfg=microban_getup5_ppo_runner_cfg(),
 )
