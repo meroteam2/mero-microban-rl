@@ -1,6 +1,6 @@
 """Microban tasks for MJLab.
 
-Importing this package registers the ``Microban-Stand``
+Importing this package registers the ``Microban-Stand``, ``Microban-Crawl``, ``Microban-Crawl-CPG``, ``Microban-Crawl-Arms`` and ``Microban-Crawl-Arms-2``
 tasks with MJLab.
 """
 
@@ -13,6 +13,21 @@ if "microsoft" in os.uname().release.lower() and os.environ.get("DISPLAY"):
 
 from mjlab.tasks.registry import register_mjlab_task  # noqa: E402
 
+from microban_rl.crawl_arms_env_cfg import (  # noqa: E402
+  ArmNoiseRunner,
+  microban_crawl_arms2_env_cfg,
+  microban_crawl_arms2_ppo_runner_cfg,
+  microban_crawl_arms_env_cfg,
+  microban_crawl_arms_ppo_runner_cfg,
+)
+from microban_rl.crawl_cpg_env_cfg import (  # noqa: E402
+  microban_crawl_cpg_env_cfg,
+  microban_crawl_cpg_ppo_runner_cfg,
+)
+from microban_rl.crawl_env_cfg import (  # noqa: E402
+  microban_crawl_env_cfg,
+  microban_crawl_ppo_runner_cfg,
+)
 from microban_rl.stand_env_cfg import (  # noqa: E402
   microban_stand_env_cfg,
   microban_stand_ppo_runner_cfg,
@@ -23,4 +38,37 @@ register_mjlab_task(
   env_cfg=microban_stand_env_cfg(),
   play_env_cfg=microban_stand_env_cfg(play=True),
   rl_cfg=microban_stand_ppo_runner_cfg(),
+)
+
+
+register_mjlab_task(
+  task_id="Microban-Crawl",
+  env_cfg=microban_crawl_env_cfg(),
+  play_env_cfg=microban_crawl_env_cfg(play=True),
+  rl_cfg=microban_crawl_ppo_runner_cfg(),
+)
+
+
+register_mjlab_task(
+  task_id="Microban-Crawl-CPG",
+  env_cfg=microban_crawl_cpg_env_cfg(),
+  play_env_cfg=microban_crawl_cpg_env_cfg(play=True),
+  rl_cfg=microban_crawl_cpg_ppo_runner_cfg(),
+)
+
+
+register_mjlab_task(
+  task_id="Microban-Crawl-Arms",
+  env_cfg=microban_crawl_arms_env_cfg(),
+  play_env_cfg=microban_crawl_arms_env_cfg(play=True),
+  rl_cfg=microban_crawl_arms_ppo_runner_cfg(),
+)
+
+
+register_mjlab_task(
+  task_id="Microban-Crawl-Arms-2",
+  env_cfg=microban_crawl_arms2_env_cfg(),
+  play_env_cfg=microban_crawl_arms2_env_cfg(play=True),
+  rl_cfg=microban_crawl_arms2_ppo_runner_cfg(),
+  runner_cls=ArmNoiseRunner,
 )
