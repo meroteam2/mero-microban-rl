@@ -86,7 +86,7 @@ source ~/.local/bin/env        # 또는 새 터미널 열기
 
 # 2) 레포 받기 — 이 레포 (mero-microban-rl) 를 ~/mero 에 서브모듈과 함께
 #    microban, mjlab, robot_keyframe_kit 은 서브모듈로 아래 커밋에 고정되어 있음
-git clone --recursive https://github.com/<user>/mero-microban-rl.git ~/mero
+git clone --recursive https://github.com/meroteam2/mero-microban-rl.git ~/mero
 #    (이미 받았다면: git -C ~/mero submodule update --init)
 #    서브모듈 없이 직접 받는 경우:
 #      git clone https://github.com/Rhoban/microban.git && git -C microban checkout d0a128d
