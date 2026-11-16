@@ -1,0 +1,12 @@
+[project]
+name = "microban-keyframe-editor"
+version = "0.1.0"
+description = "robot_keyframe_kit setup for Microban get-up keyframes"
+requires-python = ">=3.12"
+dependencies = ["robot-keyframe-kit", "mujoco==3.16.0"]  # same MuJoCo as microban_rl
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+robot-keyframe-kit = { path = "../robot_keyframe_kit", editable = true }
