@@ -1,0 +1,7 @@
+"""`microban-train`: MJLab's train CLI with the Microban task registered."""
+
+import microban_rl  # noqa: F401  (registers Microban-Stand)
+from mjlab.scripts.train import main
+
+if __name__ == "__main__":
+  main()

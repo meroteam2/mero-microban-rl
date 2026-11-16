@@ -1,0 +1,45 @@
+[project]
+name = "microban-rl"
+version = "0.1.0"
+description = "Microban humanoid standing task on MJLab (MuJoCo Warp)."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "joblib>=1.6.0",
+  "lz4>=4.4.5",
+  "mjlab[cu130]",
+  "onnx>=1.23.2",
+  "onnxruntime>=1.31.1",
+  "torch>=2.14.0",
+  "warp-lang>=1.15.0",
+]
+
+[project.scripts]
+microban-train = "microban_rl.train:main"
+microban-play = "microban_rl.play:main"
+microban-record = "microban_rl.video:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+constraint-dependencies = ["GitPython>=3.1.59", "lxml>=6.1.0"]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+# CUDA 13.0 build: includes sm_120 kernels for RTX 50 series (Blackwell).
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+mjlab = { path = "../mjlab", editable = true }
+torch = { index = "pytorch-cu130" }
+warp-lang = { index = "nvidia" }

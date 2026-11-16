@@ -1,0 +1,12 @@
+# Python / uv environments and caches
+.venv/
+__pycache__/
+*.pyc
+
+# Training logs (the final checkpoints are copied to checkpoints/)
+microban_rl/logs/
+**/logs/rsl_rl/
+
+# Misc
+.DS_Store
+*.log

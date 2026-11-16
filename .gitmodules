@@ -1,0 +1,9 @@
+[submodule "microban"]
+	path = microban
+	url = https://github.com/Rhoban/microban.git
+[submodule "mjlab"]
+	path = mjlab
+	url = https://github.com/mujocolab/mjlab.git
+[submodule "robot_keyframe_kit"]
+	path = robot_keyframe_kit
+	url = https://github.com/Stanford-TML/robot_keyframe_kit.git
