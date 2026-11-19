@@ -2,6 +2,10 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 
 # Training logs (the final checkpoints are copied to checkpoints/)
 microban_rl/logs/

@@ -1,0 +1,8 @@
+{
+  "_설명": "바꾸고 싶은 값만 config.json에 넣으세요. 전체 기본값은 mero/config.py",
+  "serial": {"port": "/dev/ttyAS0", "baud": 115200},
+  "control": {"hz": 40.0},
+  "policy": {"path": "models/walk.onnx", "gyro_frame": "imu"},
+  "battery": {"warn_v": 7.0, "low_v": 6.8, "critical_v": 6.4, "offset_v": 0.0},
+  "teleop": {"vx_max": 0.30, "vx_step": 0.05}
+}

@@ -1,0 +1,8 @@
+calibration.json
+calibration.json.bak
+config.json
+__pycache__/
+*.pyc
+.pytest_cache/
+viewer/.venv/
+viewer/mero_world.sdf

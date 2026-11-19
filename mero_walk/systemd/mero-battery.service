@@ -1,0 +1,15 @@
+# 배터리 감시(로봇 전원이 켜져 있는 동안 항상). 설치: sudo bash install_robot.sh --battery-service
+[Unit]
+Description=MERO battery voltage guard (2S Li-ion)
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/orangepi/mero_walk
+# --poweroff: 위험 전압이 60초 이어지면 오렌지파이를 종료합니다(모터 전원은 스위치로 끄세요)
+ExecStart=/home/orangepi/microban/.venv/bin/python -m mero battery --watch --period 20 --poweroff
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
