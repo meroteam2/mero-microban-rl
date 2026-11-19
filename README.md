@@ -9,6 +9,8 @@ PPO(rsl-rl)로 학습하는 환경입니다.
   → [포복 태스크](#포복-태스크-최종-microban-crawl-arms-2), 영상 `~/mero/videos/crawl.mp4`
 - **`Microban-GetUp-5` + walk.onnx (일어나기 → 보행)**: 엎드린 자세에서 키프레임을 참조해 일어난 뒤 microban 의 walk.onnx 로 걷기
   → [일어나기 → 보행](#일어나기--보행-최종-microban-getup-5-model_2500--walkonnx), 영상 `~/mero/videos/getup_walk.mp4`
+- **`Microban-Walk-DR` (실물 MERO 보행)**: walk.onnx 로 actor 를 초기화하고 30 Hz·5 V 게인·바닥 DR·기어 백래시 환경에서 미세조정
+  → [보행](#보행-최종-microban-walk-dr-walkonnx-초기화--미세조정), ONNX `mero_walk/models/mero_walk_dr.onnx`
 
 ## 폴더 구조
 
@@ -16,7 +18,7 @@ PPO(rsl-rl)로 학습하는 환경입니다.
 ~/mero/
 ├── README.md            ← 이 문서
 ├── LICENSE              ← GPL-3.0 (아래 "라이선스")
-├── checkpoints/         ← 최종 체크포인트 3개 (Stand, Crawl-Arms-2, GetUp-5) + README
+├── checkpoints/         ← 최종 체크포인트 (Stand, Crawl-Arms-2, GetUp-5, Walk-DR) + README
 ├── onnx/                ← 최종 정책 ONNX 3개 + getup_reference.npz + 사용법·실물 점검 README
 ├── videos/crawl.mp4     ← 최종 포복 정책 영상 (12 초, 비스듬한 추적 카메라)
 ├── videos/crawl_top.mp4 ← 같은 정책의 top 뷰 영상 (12 초)
@@ -37,6 +39,9 @@ PPO(rsl-rl)로 학습하는 환경입니다.
     │   ├── crawl_cpg_env_cfg.py, cpg.py, curriculum.py, noise.py ← CPG 실험 (중단, 비교용 보존)
     │   ├── symmetry.py           ← 좌우 미러 대칭 (rsl-rl Symmetry 확장)
     │   ├── walk_onnx.py          ← microban walk.onnx 를 MJLab 에서 실행 (관측·지연·게인)
+    │   ├── walk_env_cfg.py       ← Microban-Walk / -Walk-DR (실물 MERO 보행: 30 Hz, walk.onnx 관측 형식)
+    │   ├── backlash.py           ← XL330 기어 백래시 + kp·토크·보정오차 랜덤화 액추에이터
+    │   ├── floor_dr.py           ← 바닥 마찰·접촉 강성 랜덤화 (로봇 충돌 geom priority 1)
     │   ├── getup_env_cfg.py      ← Microban-GetUp (참조 residual 행동, RSI, 보상, 단계 판정)
     │   ├── getup2~5_env_cfg.py   ← run 2~5 변경점 (비틀기 제한, 손 떼기, 몸통 비틀기·한 팔·하중, pitch 중심)
     │   ├── video.py              ← 정책 영상 저장 (microban-record)
@@ -53,6 +58,9 @@ PPO(rsl-rl)로 학습하는 환경입니다.
     │   ├── monitor_getup.py, measure_push.py ← 일어나기 환경별 점검 (단계·대칭·밀기·착지 충격)
     │   ├── getup_walk.py, record_getup_walk.py ← 4단계 전환 측정·viser / 영상
     │   ├── export_onnx.py        ← 최종 정책 ONNX 내보내기 (메타데이터, torch 대비 검증)
+    │   ├── init_from_walk_onnx.py ← walk.onnx 가중치로 Walk 체크포인트 만들기 (자이로 프레임 변환)
+    │   ├── export_walk_onnx.py   ← 보행 정책 평가 (명령별 넘어짐·속도, 밀기/최악 DR) + mero_walk 용 ONNX
+    │   ├── check_walk_env.py, probe_walk.py ← 보행 환경 점검 (관측 형식, DR 적용) / 한 env 추적 출력
     │   ├── make_getup_back_init.py ← 누운 일어나기 에디터 시작 파일 (init/getup_back_init.lz4)
     │   └── analysis/             ← 일회성 분석 스크립트 (엎드린/누운 가능성, 키프레임 자세 계산, 대칭 점검)
     ├── data/                     ← 일어나기 학습용 키프레임 복사본, 참조 궤적 (getup_reference.npz)
@@ -516,6 +524,94 @@ stand_target 6.5 초, `scripts/make_getup_back_init.py`), 분석 스크립트 `s
 두 번 필요해 난이도가 높습니다. 엎드린 버전을 먼저 완성했고, 누운 상태는 "옆으로 굴러 엎드린 뒤 엎드린 일어나기로
 잇기"가 더 쉬운 대안으로 제안되어 있습니다 (구르기 동작은 아직 계산하지 않음).
 
+## 보행 (최종: `Microban-Walk-DR`, walk.onnx 초기화 + 미세조정)
+
+실물 MERO 로봇(`mero_walk/` 런타임)에서 쓸 보행 정책입니다. 최종: **`checkpoints/walk_dr_model_1000.pt`**
+(원본 `logs/rsl_rl/microban_walk/2026-11-20_06-29-45_dr/model_1000.pt`), ONNX **`mero_walk/models/mero_walk_dr.onnx`**.
+학습은 원격 PC (RTX 4070 Ti SUPER, 4096 env, 약 1 s/iteration) 에서 했습니다.
+
+### 환경 (`walk_env_cfg.py`)
+
+- **관측·행동 = walk.onnx 형식** (`mero_walk/mero/policy.py` 가 그대로 읽음): 몸통 각속도 (3, 몸통 프레임 → `--gyro-frame body`),
+  투영 중력 (3), 관절각 − 기본 자세 (18, head 제외), 관절 속도 (18), 직전 행동 (18), 명령 vx·vy·wz (3) = 63 → 18.
+  목표 = 기본 자세 + 1.0 × 행동, head 는 0 유지.
+- **실물 조건**: 제어 30 Hz (115200 bps 버스, 물리 1/180 s × 6), 5 V 공급에서 `kp_walk` 190 ≈ 0.275 Nm/rad, 토크 한계 0.64 Nm,
+  명령 지연 2–5 물리 스텝 (11–28 ms), 자이로·중력 관측 지연 0–2 스텝, 관절 속도 지연 0–1 스텝.
+- 보상·이벤트·PPO 는 walk.onnx 를 만든 Rhoban 학습 레포 [MarcDcls/mjlab_microban](https://github.com/MarcDcls/mjlab_microban)
+  (Apache-2.0, commit `d594a60`) 의 값을 따름: 속도 추종, 10° 앞기울기 upright, 자세, air time 0.125–0.3 s, 발 높이 2 cm,
+  발 미끄럼, 발 간격 ≥ 8 cm, 자기 충돌, 1–3 초마다 ±0.5 m/s 밀기, 관절 armature·마찰 ±10 %, 몸통 무게중심 ±5 mm.
+- 명령 범위: vx −0.3–0.4, vy ±0.2 m/s, wz ±0.75 rad/s, 10 % 정지 명령.
+- **`Microban-Walk-DR` 추가 랜덤화** (env 마다 리셋 때):
+  - 바닥 (`floor_dr.py`): 마찰 0.4–1.2, 접촉 solref timeconst 0.012–0.04 s · dampratio 0.7–1.3 (딱딱한 바닥 ~ 매트).
+    로봇 충돌 geom 에 priority 1 을 줘서 이 값이 로봇–바닥 접촉을 그대로 결정.
+  - 기어 백래시 (`backlash.py`): 관절마다 유격 0–3°. 모터(엔코더) 쪽 각은 목표를 따라가다 유격 끝에서 링크를 밀고,
+    유격 안에서는 링크에 토크가 전달되지 않음. **actor 는 엔코더 각을 관측** (critic 은 실제 링크 각).
+  - 보정 오차 ±2° (엔코더가 실제보다 c 만큼 다르게 읽고, 목표도 그만큼 어긋남), kp × 0.75–1.3, 토크 한계 × 0.75–1.0.
+- `Microban-Walk` 는 같은 환경에서 백래시·보정 오차·바닥 DR 을 뺀 것 (발 마찰 0.3–1.2 만, kp × 0.9–1.1).
+
+### 학습 과정
+
+| 시도 | 내용 | 결과 |
+| --- | --- | --- |
+| run 1–4 | 직접 만든 보상 (좁은 추종 std 0.1, 행동 std 0.25 rad), 이후 보행 위상 클럭 + 접지 스케줄 보상, 약한 DR | 모두 **제자리에 서 있기**로 수렴 (결정적 정책 vx = 0) |
+| upstream 레시피 | mjlab_microban 설정 그대로 (행동 scale 1, 초기 std 1, entropy 0.01) | 700 iteration 까지 여전히 서 있음 (upstream 은 15,000 iteration 학습) |
+| **walk.onnx 초기화** | walk.onnx 는 우리 actor 와 구조가 같음 (63→512→256→128→18 ELU, 관측 정규화). IMU 프레임 자이로 → 몸통 프레임 변환은 부호 있는 축 치환이라 정규화·첫 층에 접어 넣음 (`scripts/init_from_walk_onnx.py`, 출력 차 3.8e−6) | iteration 0 부터 30 Hz·전체 DR 에서 걸음 |
+| **미세조정** | `Microban-Walk-DR`, 초기 행동 std 0.15, entropy 0.002, 2000 iteration (약 33 분) | model_1000 선택 (아래) |
+
+### 결과 (`scripts/export_walk_onnx.py`, `Microban-Walk-DR` 재생 설정, 명령마다 64 env × 10 초)
+
+넘어짐 비율 (8 개 명령 평균). 기본 = 밀기 없음, DR 은 학습 분포 그대로. 최악 = 백래시 3°, kp·토크 × 0.75–0.8, 바닥 마찰 0.4–0.5.
+
+| 정책 | 기본 | 밀기 (±0.5 m/s, 1–3 초마다) | 최악 DR | 밀기 + 최악 DR |
+| --- | ---: | ---: | ---: | ---: |
+| walk.onnx (초기화 그대로) | 0 % | 7.8 % | 0.2 % | 31 % |
+| **미세조정 model_1000 (최종)** | **0 %** | **2.5 %** | **0 %** | 29 % |
+| 미세조정 model_1999 | 0 % | 2.0 % | 1.8 % | 30 % |
+
+model_1000 속도 추종 (기본 조건, 뒤 2/3 평균):
+
+| 명령 (vx, vy, wz) | 측정 vx, vy, wz | walk.onnx 초기화 |
+| --- | --- | --- |
+| (0, 0, 0) | +0.006, +0.002, −0.005 | 0, 0, 0 |
+| (0.1, 0, 0) | +0.086, −0.005, +0.013 | +0.087 |
+| (0.2, 0, 0) | +0.151, +0.003, −0.007 | +0.171 |
+| (0.3, 0, 0) | +0.209, −0.006, −0.003 | +0.246 |
+| (−0.15, 0, 0) | −0.113, +0.004, −0.001 | −0.144 |
+| (0, 0.1, 0) | +0.007, +0.036, +0.002 | vy +0.038 |
+| (0, 0, 0.5) | +0.010, −0.007, +0.366 | wz +0.453 |
+| (0.15, 0, −0.4) | +0.119, +0.001, −0.264 | +0.127, wz −0.272 |
+
+- 미세조정으로 밀기에 넘어지는 비율이 7.8 → 2.5 % 로 줄었고, 최악 DR 에서도 넘어지지 않습니다.
+- 대신 빠른 명령을 덜 따라갑니다 (0.3 m/s 명령에 0.21 m/s, walk.onnx 0.25). 실물에서는 명령을 조금 크게 주면 됩니다.
+- 밀기와 최악 DR 이 겹치면 둘 다 30 % 정도 넘어집니다 (가장 약한 모터·미끄러운 바닥에 강한 밀기).
+- 실물 전 확인할 것: 30 Hz 실제 주기·지연 (`mero bench`), 5 V 에서의 실제 kp (190 레지스터 ≈ 0.275 Nm/rad 가정), 관절 유격 실측.
+
+### 실행
+
+```bash
+cd ~/mero/microban_rl
+
+# 1) walk.onnx 로 초기화 체크포인트 만들기 (--template: 같은 태스크의 아무 체크포인트, 예: Microban-Walk 를 몇 iteration 돌린 model_0.pt)
+uv run microban-train Microban-Walk --agent.max-iterations 1
+uv run python scripts/init_from_walk_onnx.py --template logs/rsl_rl/microban_walk/<run>/model_0.pt \
+    --out logs/rsl_rl/microban_walk/walkonnx_init/model_0.pt
+
+# 2) 미세조정 (git 없는 PC 에서는 GIT_PYTHON_REFRESH=quiet)
+uv run microban-train Microban-Walk-DR --agent.resume True --agent.load-run walkonnx_init --agent.load-checkpoint model_0.pt
+
+# 평가 (밀기 / 최악 DR) + mero_walk 용 ONNX 내보내기
+TASK=Microban-Walk-DR uv run python scripts/export_walk_onnx.py ../checkpoints/walk_dr_model_1000.pt --push --hard
+TASK=Microban-Walk-DR uv run python scripts/export_walk_onnx.py ../checkpoints/walk_dr_model_1000.pt \
+    --out ../mero_walk/models/mero_walk_dr.onnx
+
+# 환경 점검 (관측 형식, 바닥 DR·백래시 적용 확인) / 재생
+uv run python scripts/check_walk_env.py --task Microban-Walk-DR
+uv run microban-play Microban-Walk-DR --viewer viser --checkpoint-file ../checkpoints/walk_dr_model_1000.pt
+
+# 로봇에서 (mero_walk/README.md 5장)
+mero run --policy models/mero_walk_dr.onnx --gyro-frame body
+```
+
 ## ONNX 내보내기
 
 최종 정책 3개 (Stand, Crawl-Arms-2, GetUp-5) 의 actor 를 관측 정규화 포함 ONNX 로 내보냈습니다 (`onnx/`).
@@ -532,6 +628,7 @@ microban 에서 가져오거나 수정한 내용을 포함하므로 배포 시 G
 | `keyframe_editor/microban_scene.xml` | microban `src/model/mjcf/scene.xml`·`robot.xml` 을 수정해 저장한 MJCF (토크 한계, 시뮬레이션 옵션, 손 사이트, 키 자세) |
 | `microban_rl/scripts/walk_microban_sim.py` | microban `src/imu_reader.py` 의 IMU 변환 함수 복사, `sim/mujoco_controller.py`·`moves/walk.py` 구조 재현 |
 | `microban_rl/src/microban_rl/walk_onnx.py` | microban `walk.onnx` 의 인터페이스·상수 (관측 순서, IMU 장착 쿼터니언, KP_RL, 센서 지연) 재현, walk.onnx 가중치를 실행 시 읽음 |
+| `microban_rl/src/microban_rl/walk_env_cfg.py`, `scripts/init_from_walk_onnx.py` | walk.onnx 가중치로 actor 초기화 (실행 시 서브모듈에서 읽음), 보상·DR 값은 mjlab_microban (Apache-2.0) 을 따름 |
 | `microban_rl/src/microban_rl/robot.py` | MJCF 는 서브모듈에서 실행 시 읽음 (복사 안 함), 기본 자세·KP 상수는 microban `constants.py` / walk.onnx 메타데이터 값 |
 
 mjlab (Apache-2.0) 과 robot_keyframe_kit (MIT) 은 서브모듈로 수정 없이 사용하며 GPL-3.0 과 호환됩니다.

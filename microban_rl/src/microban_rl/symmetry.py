@@ -94,8 +94,11 @@ def _maps(env) -> dict:
     idx_parts, sign_parts, offset = [], [], 0
     for term, dim in zip(terms, om.group_obs_term_dim[group], strict=True):
       n = dim[-1]
-      if term in _JOINT_TERMS:
+      if term in _JOINT_TERMS and n == len(joint_idx):
         i, s = joint_idx, joint_sign
+      elif term in _JOINT_TERMS and n == len(act_idx):
+        # Joint terms over the action joints only (e.g. Microban-Walk: no head).
+        i, s = act_idx, act_sign
       elif term in _ACTION_TERMS:
         i, s = act_idx, act_sign
       elif term in _TERM_MAPS:

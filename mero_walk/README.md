@@ -166,6 +166,12 @@ mero battery     # "배터리(ina219) 7.xx V" 가 나와야 함. 멀티미터 �
 mero run --policy models/our_walk.onnx --gyro-frame body
 ```
 
+**우리 보행 정책 `models/mero_walk_dr.onnx`** (`microban_rl` 의 `Microban-Walk-DR`, 루트 README "보행" 참고): walk.onnx 로 초기화한 뒤 이 로봇 조건(30 Hz, 5 V `kp_walk` 190 ≈ 0.275 Nm/rad, 지연 11–28 ms)에 바닥 마찰·강성 랜덤화와 기어 백래시(0–3°)·보정 오차(±2°)를 넣어 미세조정한 정책입니다. 관측·행동 형식은 walk.onnx 와 같고(63개, 18개), 자이로만 몸통 기준입니다.
+
+```bash
+mero run --policy models/mero_walk_dr.onnx --gyro-frame body     # config.json: control.hz 30, kp_walk 190
+```
+
 - mjlab에서 내보낸 ONNX의 메타데이터(`joint_names`, `default_joint_pos`, `action_scale`)를 읽어 관절 순서와 기본 자세를 맞춥니다. 관측 63개(위상 포함 65개) 형식이어야 합니다.
 - **`gyro_frame`이 중요합니다.** 업스트림 `walk.onnx`는 MJCF `imu` 사이트 기준 자이로(`imu`)를 받습니다. 우리 MJLab 환경처럼 몸통 기준 `base_ang_vel`로 학습했다면 `body`.
 - 학습 쪽 모터 게인이 다르면 `config.json`의 `control.kp_walk`(레지스터 값, 125 ≈ 0.28 Nm/rad)를 맞추세요.
