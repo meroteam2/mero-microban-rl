@@ -30,10 +30,11 @@ class BMI088:
         self._init()
 
     def _init(self) -> None:
+        # No soft reset: on the Pollen HAT a BMI088 soft reset over I2C left the bus stuck
+        # (SCL held, every device NACKs until a power cycle). The upstream driver
+        # (pollen_bmi088_imu_library) never resets either; it only writes the config registers.
         a, g, w = self.acc_addr, self.gyro_addr, self.i2c.write_byte_data
-        w(a, ACC_SOFTRESET, 0xB6)
-        time.sleep(0.002)
-        self.i2c.read_byte_data(a, ACC_CHIP_ID)        # first access after reset
+        self.i2c.read_byte_data(a, ACC_CHIP_ID)        # dummy read (datasheet: first access)
         cid = self.i2c.read_byte_data(a, ACC_CHIP_ID)
         if cid != 0x1E:
             raise RuntimeError(f"BMI088 accel chip id 0x{cid:02x} != 0x1e at 0x{a:02x}")
@@ -44,8 +45,6 @@ class BMI088:
         w(a, ACC_CONF, 0xA9)         # normal filter, 200 Hz ODR
         w(a, ACC_RANGE, 0x01)        # +-6 g
         self.acc_scale = 6.0 / 32768.0
-        w(g, GYR_SOFTRESET, 0xB6)
-        time.sleep(0.03)
         gid = self.i2c.read_byte_data(g, GYR_CHIP_ID)
         if gid != 0x0F:
             raise RuntimeError(f"BMI088 gyro chip id 0x{gid:02x} != 0x0f at 0x{g:02x}")

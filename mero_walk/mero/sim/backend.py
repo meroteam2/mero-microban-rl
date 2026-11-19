@@ -44,7 +44,8 @@ def plant(cfg):
 def open_bus(cfg, cal):
     from ..bus import MotorBus
     from ..dxl import Protocol2
-    return MotorBus(Protocol2(ser=plant(cfg).ser, baud=1_000_000), cal)
+    return MotorBus(Protocol2(ser=plant(cfg).ser, baud=1_000_000), cal,
+                    multiturn=cfg["serial"].get("multiturn_joints", []))
 
 
 def open_imu(cfg, frames):

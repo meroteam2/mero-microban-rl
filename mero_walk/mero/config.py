@@ -17,6 +17,9 @@ DEFAULTS: dict = {
         "port": "/dev/ttyAS0",      # Orange Pi Zero 2W UART on the Pollen Robot HAT
         "baud": 115200,             # all XL330 were set to 115200 (OPi cannot do 1 Mbps on this UART)
         "read_mode": "auto",        # auto | fast_indirect | fast | sync
+        # joints whose reference pose sits at the motor's 0/4095 wrap (horn ~180° off): their motors run
+        # in Extended Position mode (4) and the bus tracks the turn. e.g. ["right_shoulder_pitch"]
+        "multiturn_joints": [],
     },
     "imu": {
         "i2c_bus": 1,
@@ -35,6 +38,10 @@ DEFAULTS: dict = {
         "torque_off_on_fall": True,
         "overcurrent_a": 15.0,      # summed estimated current that cuts torque (upstream value)
     },
+    "log": {
+        "walk": True,               # CSV per walk (SPACE start .. stand/stop): policy obs/action, IMU, joints
+        "dir": "logs",
+    },
     "policy": {
         "path": "models/walk.onnx",
         "gyro_frame": "imu",        # imu: upstream walk.onnx | body: policies whose base_ang_vel is in the trunk frame
@@ -45,6 +52,9 @@ DEFAULTS: dict = {
         "wz_step": 0.20, "wz_max": 1.00,                     # rad/s
     },
     "battery": {
+        "source": "motor",          # motor: XL330 input voltage (pack wired straight to the motors)
+                                    # ina219: I2C sensor on the pack side (motors behind a 5 V regulator)
+        "sensor": {"i2c_bus": 1, "addr": 0x40, "scale": 1.0},   # scale: voltage divider ratio, 1 = none
         "cells": 2,
         "full_v": 8.4,
         "warn_v": 7.0,              # 3.5 V/cell: start thinking about charging

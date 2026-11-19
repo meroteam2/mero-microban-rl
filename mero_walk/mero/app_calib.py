@@ -12,19 +12,41 @@ import time
 import numpy as np
 
 from . import config, term
-from .battery import BatteryMonitor
+from .battery import CRITICAL, BatteryMonitor, voltage_reader
 from .bus import BusLock, open_bus
 from .calibration import IMU_POSES, Calibration, JointCal, solve_mount
 from .imu import ImuFrames, open_imu
-from .joints import DEFAULT_SIGN, JOINT_RANGE, JOINTS, LABEL_KO, MIRROR, MOTOR_ID, ZERO_POSE
+from .joints import DEFAULT_SIGN, JOINT_RANGE, JOINTS, LABEL_KO, MIRROR, MOTOR_ID, STAND_POSE, ZERO_POSE
 from .stream import StateStream, state_msg
 
-OBSERVE, JOG, ZERO, IMUWIZ = "관찰", "조그", "원점확인", "IMU"
+OBSERVE, JOG, ZERO, IMUWIZ, HOLD = "관찰", "조그", "원점확인", "IMU", "서기"
 JOG_STEP = math.radians(5.0)
+TRIM_STEP = math.radians(1.0)        # live zero trim per ←→ press while holding the stand pose
+CALIB_PERIOD = 0.025                 # loop target; at 115200 bps the bus read alone is ~31 ms
+ZERO_SNAP = math.pi / 2              # zero offsets are whole multiples of 90°
+SNAP_WARN = math.radians(20.0)       # leftover beyond this: pose is off or the 90° guess is wrong
+
+
+def snap_zero(zero: float) -> tuple[float, float]:
+    """Nearest 90° multiple in [-180°, 180°) and the leftover (zero - snapped)."""
+    snapped = round(zero / ZERO_SNAP) * ZERO_SNAP
+    snapped = (snapped + math.pi) % (2 * math.pi) - math.pi
+    resid = (zero - snapped + math.pi) % (2 * math.pi) - math.pi
+    return snapped, resid
+
+
+def _resid_msg(resid: dict[str, float]) -> str:
+    bad = {n: r for n, r in resid.items() if abs(r) > SNAP_WARN}
+    worst = max(resid, key=lambda n: abs(resid[n]))
+    s = f"90° 단위로 맞춤, 남은 오차 최대 {LABEL_KO[worst]} {math.degrees(resid[worst]):+.1f}°"
+    if bad:
+        s += (f"  {term.YEL}20° 넘음: " + ", ".join(f"{LABEL_KO[n]} {math.degrees(r):+.0f}°" for n, r in bad.items())
+              + f" — 자세를 다시 확인하세요{term.RST}")
+    return s
 
 HELP = (f"{term.DIM}↑↓ 관절 선택   f 부호 반전   j 조그 ON/OFF(선택 관절만 토크)   ←→ 조그 ±5°   "
-        f"z 원점확인 모드   Z 선택 관절 원점=현재   A 전체 원점=현재\n"
-        f"m IMU 장착방향 마법사   g 자이로 바이어스   r 선택 관절 기본값   s 저장   q 종료{term.RST}")
+        f"z 원점확인 모드   Z 선택 관절 원점=현재(90° 단위)   A 전체 원점=현재(90° 단위)   x 선택 관절 원점=현재(정확히)\n"
+        f"t 서기 자세(토크 ON, ←→ 1°씩 원점 보정)   m IMU 장착방향 마법사   g 자이로 바이어스   r 선택 관절 기본값   s 저장   q 종료{term.RST}")
 
 
 class CalibApp:
@@ -45,8 +67,16 @@ class CalibApp:
         self.wiz_result: dict | None = None
         self.viewers = 0
         self.mon = BatteryMonitor(cfg)
+        self.vread = voltage_reader(cfg, emit=lambda m: print(m))
         self._vlast = 0.0
         self._vidx = 0
+        self.ramp_from: dict[str, float] = {}
+        self.ramp_t0 = 0.0
+        self.ramping = False
+        self.trimmed: dict[str, float] = {}  # joint -> total trim this session (rad, sim direction)
+        self.read_err = ""                   # shown while reads fail, cleared by the next good read
+        self.reads = 0
+        self.read_fails = 0
 
     @property
     def joint(self) -> str:
@@ -65,13 +95,99 @@ class CalibApp:
         self.bus.write_goal({n: self.jog_target})
         self.bus.torque(True, [n])
 
-    def set_zero(self, names: list[str]) -> None:
+    # ------------------------------------------------ stand hold (same as `run` t) + live trim
+    def _hold_on(self) -> None:
+        self._jog_off()
+        try:
+            self.q, _, self.raw = self.bus.read_state()
+        except Exception as e:
+            self.msg = f"{term.RED}관절 값을 읽지 못했습니다: {e}{term.RST}"
+            return
+        if self.mon.status.level >= CRITICAL:
+            self.msg = f"{term.RED}배터리 위험 수준이라 토크를 켜지 않습니다.{term.RST}"
+            return
+        out = [n for n in JOINTS if not (JOINT_RANGE[n][0] - 0.05 <= self.q[n] <= JOINT_RANGE[n][1] + 0.05)]
+        if out:
+            self.msg = (f"{term.RED}관절 범위 밖이라 토크를 켜지 않습니다: "
+                        + ", ".join(f"{LABEL_KO[n]} {math.degrees(self.q[n]):+.0f}°" for n in out) + term.RST)
+            return
+        bus = self.bus
+        bus.no_profile()
+        bus.set_kp(int(self.cfg["control"]["kp_stand"]))
+        bus.write_goal({n: self.q[n] for n in JOINTS})     # hold where we are, then ramp
+        bus.torque(True)
+        self.mode = HOLD
+        self.ramp_from = dict(self.q)
+        self.ramp_t0 = time.monotonic()
+        self.ramping = True
+        self.msg = (f"{term.YEL}토크 ON → 서는 자세로 이동 (로봇을 잡고 있으세요).{term.RST} "
+                    "틀어진 관절을 ↑↓로 고르고 ←→로 1°씩 맞춘 뒤 s. t 토크 OFF, k 비상정지")
+
+    def _hold_step(self) -> None:
+        if not self.ramping:
+            return
+        a = min((time.monotonic() - self.ramp_t0) / float(self.cfg["control"]["ramp_s"]), 1.0)
+        self.bus.write_goal({n: self.ramp_from[n] + a * (STAND_POSE[n] - self.ramp_from[n]) for n in JOINTS})
+        if a >= 1.0:
+            self.ramping = False
+
+    def _hold_off(self, msg: str) -> None:
+        self.bus.torque_off_all_robust()
+        self.ramping = False
+        self.mode = OBSERVE
+        self.msg = msg
+
+    def _trim(self, step: float) -> None:
+        """Shift the selected joint's zero so the real joint moves `step` (sim direction) while
+        its target stays the stand pose."""
+        if self.ramping:
+            self.msg = "서는 자세로 이동 중입니다. 끝나면 보정하세요"
+            return
+        n = self.joint
+        c = self.cal.joints[n]
+        c.zero += c.sign * step
+        self.bus.write_goal({n: STAND_POSE[n]})
+        self.trimmed[n] = self.trimmed.get(n, 0.0) + step
+        self.dirty = True
+        self.msg = (f"{LABEL_KO[n]} 보정 {math.degrees(self.trimmed[n]):+.0f}° (원점 {math.degrees(c.zero):+.1f}°). "
+                    "모델(서는 자세)과 실제가 같아 보이면 s")
+
+    def _hold_key(self, k: str) -> None:
+        T = term
+        if k in (T.KEY_UP, T.KEY_DOWN):
+            self.sel = (self.sel + (-1 if k == T.KEY_UP else 1)) % len(JOINTS)
+            n = self.joint
+            self.msg = f"선택: {LABEL_KO[n]} (ID {MOTOR_ID[n]}). ←→로 1°씩 보정"
+        elif k in (T.KEY_LEFT, T.KEY_RIGHT):
+            self._trim(TRIM_STEP if k == T.KEY_RIGHT else -TRIM_STEP)
+        elif k == "t":
+            self._hold_off("토크 OFF (서기 자세 끝)" + (" — 보정값은 s로 저장하세요" if self.dirty else ""))
+        elif k in ("k", T.KEY_ESC):
+            self._hold_off(f"{T.RED}비상 정지: 모든 토크 OFF{T.RST}")
+        elif k == "s":
+            p = self.cal.save()
+            self.dirty = False
+            self.msg = f"{T.GRN}저장함: {p}{T.RST} (토크는 아직 켜져 있음, t로 끄기)"
+        elif k in ("q", T.KEY_EOF):
+            self._hold_off("토크 OFF")
+            self.handle_key(k)
+        else:
+            self.msg = "서기 자세 중에는 ↑↓ ←→ s t k q만 됩니다. t로 토크를 먼저 끄세요"
+
+    def set_zero(self, names: list[str], exact: bool = False) -> dict[str, float]:
+        """Zero = current pose, snapped to the nearest 90° multiple (horns are mis-mounted by
+        whole quarter turns), or exactly (`exact`: fine trim of one joint's small leftover).
+        Returns the leftover error per joint (rad, motor frame)."""
+        resid = {}
         for n in names:
             c = self.cal.joints[n]
             motor_rad = (self.raw[JOINTS.index(n)] - 2048.0) * (2 * math.pi / 4096.0)
             # want sign*(motor_rad - zero) == ZERO_POSE[n]
-            c.zero = motor_rad - c.sign * ZERO_POSE[n]
+            c.zero, resid[n] = snap_zero(motor_rad - c.sign * ZERO_POSE[n])
+            if exact:
+                c.zero, resid[n] = c.zero + resid[n], 0.0
         self.dirty = True
+        return resid
 
     def handle_key(self, k: str) -> None:
         T = term
@@ -79,8 +195,8 @@ class CalibApp:
             what, self.pending = self.pending, None
             if k.lower() == "y":
                 if what == "zero_all":
-                    self.set_zero(JOINTS)
-                    self.msg = "19개 관절 원점을 현재 자세(= 기준 자세)로 맞췄습니다. s로 저장하세요."
+                    resid = self.set_zero(JOINTS)
+                    self.msg = f"19개 관절 원점을 맞췄습니다({_resid_msg(resid)}). s로 저장하세요."
                 elif what == "imu_apply":
                     r = self.wiz_result
                     self.cal.mount_quat = r["quat"]
@@ -114,7 +230,13 @@ class CalibApp:
                 self.msg = "IMU 마법사 취소"
             return
 
-        if k in (T.KEY_UP, T.KEY_DOWN):
+        if self.mode == HOLD:
+            self._hold_key(k)
+            return
+
+        if k == "t":
+            self._hold_on()
+        elif k in (T.KEY_UP, T.KEY_DOWN):
             self._jog_off_keep_mode()
             self.sel = (self.sel + (-1 if k == T.KEY_UP else 1)) % len(JOINTS)
             if self.mode == JOG:
@@ -151,8 +273,15 @@ class CalibApp:
             self.msg = ("원점확인: 로봇을 기준 자세(다리 쭉 펴고, 팔은 몸통 옆으로 곧게 내리고, 머리 정면)로 두세요. "
                         "'차이'가 기준과의 오차입니다." if self.mode == ZERO else "관찰 모드")
         elif k == "Z":
-            self.set_zero([self.joint])
-            self.msg = f"{LABEL_KO[self.joint]} 원점 = 현재 위치 ({math.degrees(self.cal.joints[self.joint].zero):+.1f}°)"
+            resid = self.set_zero([self.joint])
+            self.msg = (f"{LABEL_KO[self.joint]} 원점 {math.degrees(self.cal.joints[self.joint].zero):+.0f}° "
+                        f"({_resid_msg(resid)})")
+        elif k == "x":
+            n = self.joint
+            before = self.cal.joints[n].zero
+            self.set_zero([n], exact=True)
+            self.msg = (f"{LABEL_KO[n]} 원점 {math.degrees(self.cal.joints[n].zero):+.1f}° (정확히, "
+                        f"{math.degrees(self.cal.joints[n].zero - before):+.1f}° 바뀜). 그 관절이 기준 자세였는지 확인 후 s")
         elif k == "A":
             self.pending = "zero_all"
             self.msg = f"{term.YEL}지금 로봇이 정확히 기준 자세인가요? 19개 관절 원점을 모두 현재값으로 바꿉니다 [y/N]{term.RST}"
@@ -218,23 +347,35 @@ class CalibApp:
 
     # ---------------------------------------------------------------- loop parts
     def update(self) -> None:
+        if self.mode == HOLD:
+            self._hold_step()             # the ramp does not need a fresh read
         try:
             self.q, _, self.raw = self.bus.read_state()
         except Exception as e:
-            self.msg = f"{term.RED}모터 읽기 실패: {e}{term.RST}"
+            self.read_fails += 1
+            self.read_err = f"{term.RED}모터 읽기 실패 (누적 {self.read_fails}/{self.reads}회): {e}{term.RST}"
             return
+        finally:
+            self.reads += 1
+        self.read_err = ""
         t = time.monotonic()
         if t - self._vlast > 2.0:
             self._vlast = t
             try:
-                self.mon.update(self.bus.read_voltage(JOINTS[self._vidx % len(JOINTS)]))
-                self._vidx += 1
-            except Exception:
-                pass
+                if self.vread is not None:
+                    self.mon.update(self.vread())
+                else:
+                    self.mon.update(self.bus.read_voltage(JOINTS[self._vidx % len(JOINTS)]))
+                    self._vidx += 1
+            except Exception as e:
+                if self.vread is not None:
+                    self.mon.status.error = str(e)
         if self.stream:
             ghost = None
             if self.mode == ZERO:
                 ghost = ZERO_POSE
+            elif self.mode == HOLD:
+                ghost = STAND_POSE
             elif self.mode == JOG and self.jog_target is not None:
                 ghost = dict(self.q)
                 ghost[self.joint] = self.jog_target
@@ -254,8 +395,10 @@ class CalibApp:
         L = []
         flag = f"{term.YEL}*저장 안 됨{term.RST}" if self.dirty else ""
         L.append(f"{term.BOLD}MERO 캘리브레이션{term.RST}  모드: {term.CYN}{self.mode}{term.RST}   "
-                 f"뷰어 {self.viewers}대   {self.mon.line()}  {flag}")
-        ref = self.mode == ZERO
+                 f"뷰어 {self.viewers}대   {self.mon.line()}  {flag}"
+                 + (f"  {term.YEL}읽기 실패 {self.read_fails}/{self.reads}{term.RST}" if self.read_fails else ""))
+        ref = self.mode in (ZERO, HOLD)
+        ref_pose = STAND_POSE if self.mode == HOLD else ZERO_POSE
         L.append(f"{'':2}{'ID':>3} {'관절':<15}{'raw':>6} {'각도°':>7} {'부호':>4} {'원점°':>6}"
                  + (f" {'차이°':>6}" if ref else f" {'범위°':>13}"))
         for i, n in enumerate(JOINTS):
@@ -268,7 +411,7 @@ class CalibApp:
                    f"{sign_col}{int(c.sign):>+4d}{term.RST if sign_col else ''} {math.degrees(c.zero):>+6.1f}")
             lo, hi = JOINT_RANGE[n]
             if ref:
-                d = math.degrees(q - ZERO_POSE[n])
+                d = math.degrees(q - ref_pose[n])
                 col = term.RED if abs(d) > 20 else (term.YEL if abs(d) > 5 else term.GRN)
                 row += f" {col}{d:>+6.1f}{term.RST}"
             else:
@@ -290,6 +433,8 @@ class CalibApp:
         L.append(f"{term.DIM}  기대: 서 있으면 중력≈(0,0,-1), 앞으로 숙이면 x+, 왼쪽으로 기울이면 y+, "
                  f"위에서 봐서 반시계로 돌리면 gyro z+{term.RST}")
         L.append("")
+        if self.read_err:
+            L.append(self.read_err)
         L.append(self.msg)
         L.append("")
         L.append(HELP)
@@ -326,18 +471,21 @@ def main(args) -> int:
         return 1
     stream = None
     try:
-        stream = StateStream(int(cfg["stream"]["port"]), float(cfg["stream"]["hz"]))
+        # calib has no control loop to protect: send every bus read so the viewer is as smooth as the bus allows
+        stream = StateStream(int(cfg["stream"]["port"]), max(float(cfg["stream"]["hz"]), 1.0 / CALIB_PERIOD))
     except OSError as e:
         print("상태 스트림을 열지 못했습니다:", e)
     app = CalibApp(cfg, bus, imu, frames, cal, stream)
     try:
         with term.Keyboard() as kb:
             while not app.quit:
+                t0 = time.monotonic()
                 for k in kb.keys(0.0):
                     app.handle_key(k)
                 app.update()
                 app.render()
-                time.sleep(0.03)
+                # the bus read already takes ~31 ms at 115200; only top up to the period
+                time.sleep(max(0.0, CALIB_PERIOD - (time.monotonic() - t0)))
     except KeyboardInterrupt:
         pass
     finally:

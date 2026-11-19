@@ -32,6 +32,7 @@ def main(argv=None) -> int:
     r.add_argument("--gyro-frame", choices=["imu", "body"], default=None)
     r.add_argument("--no-stream", action="store_true")
     sb = sub.add_parser("set-baud"); sb.add_argument("new_baud", type=int)
+    sub.add_parser("swap-leg-ids", help="왼/오른 다리 모터 ID(11~16 <-> 21~26) 맞바꾸기")
     a = ap.parse_args(argv)
 
     if a.cmd == "run":
@@ -41,7 +42,7 @@ def main(argv=None) -> int:
     else:
         from . import app_tools as t
         m = {"check": t.cmd_check, "bench": t.cmd_bench, "battery": t.cmd_battery, "imu": t.cmd_imu,
-             "set-baud": t.cmd_set_baud}[a.cmd]
+             "set-baud": t.cmd_set_baud, "swap-leg-ids": t.cmd_swap_leg_ids}[a.cmd]
     return m(a) or 0
 
 

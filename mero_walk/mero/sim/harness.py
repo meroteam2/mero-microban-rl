@@ -27,6 +27,7 @@ class SimRobot:
         self.cfg = config.load("/nonexistent")
         self.cfg["control"]["hz"] = hz
         self.cfg["battery"]["state_file"] = None
+        self.cfg["log"]["walk"] = False        # tests opt in with their own WalkLog
         self.plant = Plant(true_cal=true_cal, control_hz=hz, vin=vin, act_delay_s=act_delay_s)
         self.plant.ser.echo = echo
         self.cal = sw_cal or Calibration()

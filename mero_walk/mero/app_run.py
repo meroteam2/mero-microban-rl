@@ -6,7 +6,7 @@ import sys
 import time
 
 from . import config, term
-from .battery import BatteryMonitor
+from .battery import BatteryMonitor, voltage_reader
 from .bus import BusLock, open_bus
 from .calibration import Calibration
 from .controller import WALK, STOPPING, WalkController
@@ -63,6 +63,7 @@ def main(args) -> int:
     policy = WalkPolicy(str(pol_path), cfg["policy"]["gyro_frame"])
     print(f"  정책 {pol_path.name}: 관측 {policy.obs_size}, 행동 {policy.act_size}, gyro={policy.gyro_frame}")
     mon = BatteryMonitor(cfg)
+    vread = voltage_reader(cfg)
     stream = None
     if not args.no_stream:
         try:
@@ -70,7 +71,7 @@ def main(args) -> int:
         except OSError as e:
             print(f"  상태 스트림 포트 {cfg['stream']['port']} 사용 불가: {e}")
     status = term.StatusLine()
-    ctl = WalkController(cfg, bus, imu, policy, mon, emit=status.event)
+    ctl = WalkController(cfg, bus, imu, policy, mon, emit=status.event, vread=vread)
     signal.signal(signal.SIGHUP, lambda *_: ctl.connection_lost())
     signal.signal(signal.SIGTERM, lambda *_: setattr(ctl, "quit", True))
 
@@ -117,6 +118,7 @@ def main(args) -> int:
     finally:
         status.clear()
         bus.torque_off_all_robust()
+        ctl.close_log("exit")
         try:
             print("모든 토크 OFF. 종료합니다.")
         except OSError:

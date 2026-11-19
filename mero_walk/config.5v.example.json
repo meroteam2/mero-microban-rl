@@ -1,0 +1,16 @@
+{
+  "_설명": "모터를 5V 레귤레이터로 공급하는 MERO 구성. config.json으로 복사해서 쓰세요 (cp config.5v.example.json config.json). README 4-1 참고",
+  "_게인": "5V에서는 같은 P 게인의 힘이 약 35% 약해서 7.6/4.9배(약 1.55배)로 올린 값. 시뮬레이션 기준이라 실물에서 조정 필요",
+  "control": {"hz": 30, "kp_stand": 620, "kp_walk": 190},
+  "_배터리": "INA219를 레귤레이터 앞(배터리 쪽)에 연결. 주소는 i2cdetect -y 1 로 확인(기본 0x40). 2S 리튬이온 기준 3.5/3.4/3.2 V/셀",
+  "battery": {
+    "source": "ina219",
+    "sensor": {"i2c_bus": 1, "addr": 64, "scale": 1.0},
+    "cells": 2,
+    "warn_v": 7.0,
+    "low_v": 6.8,
+    "critical_v": 6.4,
+    "hysteresis_v": 0.1,
+    "offset_v": 0.0
+  }
+}

@@ -18,6 +18,10 @@ WORLD_NAME = "mero"
 
 GHOST_RGBA = (0.1, 0.85, 1.0, 0.6)
 
+# Start the camera behind-right of the robot (robot faces +x, its left is +y), looking the same
+# way it does: the robot's left leg is on the left of the screen, like standing behind the real one.
+CAMERA_POSE = "-0.55 -0.45 0.42 0 0.35 0.686"
+
 
 def _floats(s: str | None, default):
     return tuple(float(v) for v in s.split()) if s else default
@@ -97,7 +101,7 @@ GUI = """  <gui fullscreen="0">
         <property type="string" key="state">docked</property></gz-gui>
       <engine>ogre2</engine><scene>scene</scene>
       <ambient_light>0.5 0.5 0.5</ambient_light><background_color>0.75 0.8 0.85</background_color>
-      <camera_pose>0.55 -0.55 0.42 0 0.35 2.36</camera_pose>
+      <camera_pose>{CAMERA_POSE}</camera_pose>
       <camera_clip><near>0.01</near><far>50</far></camera_clip>
     </plugin>
     <plugin filename="GzSceneManager" name="Scene Manager"><gz-gui><property key="state" type="string">floating</property>
@@ -138,7 +142,7 @@ def build_world(path: Path, mjcf: Path = MJCF, engine: str = "ogre2") -> list[st
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
-{GUI.replace("<engine>ogre2</engine>", f"<engine>{engine}</engine>")}
+{GUI.replace("<engine>ogre2</engine>", f"<engine>{engine}</engine>").replace("{CAMERA_POSE}", CAMERA_POSE)}
     <scene><ambient>0.6 0.6 0.6 1</ambient><background>0.75 0.8 0.85 1</background><grid>false</grid></scene>
     <light type="directional" name="sun"><cast_shadows>true</cast_shadows><pose>0 0 3 0 0 0</pose>
       <diffuse>0.9 0.9 0.9 1</diffuse><specular>0.2 0.2 0.2 1</specular><direction>-0.4 0.3 -0.9</direction></light>

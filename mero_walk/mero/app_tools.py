@@ -1,4 +1,4 @@
-"""Small robot-side tools: check, bench, battery, imu, set-baud."""
+"""Small robot-side tools: check, bench, battery, imu, set-baud, swap-leg-ids."""
 from __future__ import annotations
 
 import json
@@ -11,8 +11,8 @@ import time
 import numpy as np
 
 from . import config, dxl, term
-from .battery import LEVEL_KO, BatteryMonitor, CRITICAL, LOW, WARN, OK, soc_percent
-from .bus import BusLock, MotorBus, open_bus
+from .battery import LEVEL_KO, BatteryMonitor, CRITICAL, LOW, WARN, OK, open_sensor, soc_percent
+from .bus import BusLock, MotorBus, open_bus, turn_ticks
 from .calibration import Calibration
 from .imu import ImuFrames, open_imu
 from .joints import ID_TO_JOINT, JOINTS, LABEL_KO, MOTOR_ID, POLICY_ORDER_DEFAULT
@@ -59,12 +59,13 @@ def cmd_check(args) -> int:
             pmax, pmin = s32(48), s32(52)
             volt, temp, hwerr = u16(144) * 0.1, u8(146), u8(70)
             pos = s32(132)
-            q = cal.joints[n].to_sim(pos)
+            want_mode = 4 if n in bus.multiturn else 3
+            q = cal.joints[n].to_sim(pos - (turn_ticks(cal.joints[n], n, pos) if want_mode == 4 else 0))
             flags = []
             if model not in (1200,):
                 flags.append(f"모델 {dxl.MODEL_NAMES.get(model, model)} (XL330-M288 아님)")
-            if opm != 3:
-                flags.append(f"Operating Mode {opm} (3이어야 함)")
+            if opm != want_mode:
+                flags.append(f"Operating Mode {opm} ({want_mode}이어야 함" + (", 다회전 관절)" if want_mode == 4 else ")"))
             if drive & 0x01:
                 flags.append("Drive Mode 역방향 비트 ON (소프트웨어 부호와 겹침)")
             if homing != 0:
@@ -73,7 +74,7 @@ def cmd_check(args) -> int:
                 flags.append(f"Return Delay {rdt} (0 권장)")
             if shut != 52:
                 flags.append(f"Shutdown {shut} (52 권장: 입력전압 오류 끔)")
-            if (pmin, pmax) != (0, 4095):
+            if want_mode == 3 and (pmin, pmax) != (0, 4095):
                 flags.append(f"위치 제한 {pmin}~{pmax} (0~4095 아니면 목표가 잘림)")
             if fw < 46:
                 flags.append(f"펌웨어 v{fw} < 46 (Fast Sync Read 불가, 느려짐)")
@@ -87,7 +88,7 @@ def cmd_check(args) -> int:
                 print(f"      {term.YEL}↳ {f}{term.RST}")
             problems += len(flags)
             if args.fix and flags:
-                _fix(p, mid, opm, drive, homing, rdt, shut, pmin, pmax)
+                _fix(p, mid, opm, drive, homing, rdt, shut, pmin, pmax, want_mode)
         print()
         others = {i: v for i, v in p.broadcast_ping(0.2).items() if i not in ID_TO_JOINT}
         if others:
@@ -104,11 +105,11 @@ def cmd_check(args) -> int:
     return 0
 
 
-def _fix(p, mid, opm, drive, homing, rdt, shut, pmin, pmax) -> None:
+def _fix(p, mid, opm, drive, homing, rdt, shut, pmin, pmax, want_mode: int = 3) -> None:
     p.write(mid, dxl.ADDR_TORQUE_ENABLE, b"\x00")
     time.sleep(0.01)
-    if opm != 3:
-        p.write(mid, dxl.ADDR_OPERATING_MODE, b"\x03")
+    if opm != want_mode:
+        p.write(mid, dxl.ADDR_OPERATING_MODE, bytes([want_mode]))
     if drive & 0x01:
         p.write(mid, dxl.ADDR_DRIVE_MODE, bytes([drive & ~0x01]))
     if homing != 0:
@@ -117,7 +118,7 @@ def _fix(p, mid, opm, drive, homing, rdt, shut, pmin, pmax) -> None:
         p.write(mid, dxl.ADDR_RETURN_DELAY, b"\x00")
     if shut != 52:
         p.write(mid, dxl.ADDR_SHUTDOWN, bytes([52]))
-    if (pmin, pmax) != (0, 4095):
+    if want_mode == 3 and (pmin, pmax) != (0, 4095):
         p.write(mid, dxl.ADDR_MIN_POSITION, dxl.s32(0))
         p.write(mid, dxl.ADDR_MAX_POSITION, dxl.s32(4095))
     print(f"      {term.GRN}↳ ID {mid} 권장값으로 기록함{term.RST}")
@@ -184,23 +185,43 @@ def cmd_battery(args) -> int:
     cfg = config.load(args.config)
     if args.watch:
         return _battery_watch(cfg, args)
+    b = cfg["battery"]
+    if b.get("source", "motor") != "motor":
+        try:
+            dev = open_sensor(cfg)
+        except Exception as e:
+            print(f"{term.RED}배터리 센서({b['source']}) 읽기 실패: {e}{term.RST}\n"
+                  f"  i2cdetect -y {b.get('sensor', {}).get('i2c_bus', 1)} 로 주소를 확인하세요.")
+            return 1
+        v = dev.read() + float(b["offset_v"])
+        lvl = BatteryMonitor(cfg)._level_for(v, OK)
+        col = {OK: term.GRN, WARN: term.YEL, LOW: term.YEL, CRITICAL: term.RED}[lvl]
+        print(f"{col}배터리({b['source']}) {v:.2f} V  ≈{soc_percent(v, int(b['cells'])):.0f}%  [{LEVEL_KO[lvl]}]{term.RST}  "
+              f"(주의 {b['warn_v']} / 부족 {b['low_v']} / 위험 {b['critical_v']} V, {b['cells']}S)")
+        print("  아래 모터 값은 레귤레이터 출력입니다(배터리 잔량 아님).")
     lock = _locked(cfg)
     if not lock:
         st = _read_state_file(cfg)
         if st:
             print(f"런타임이 측정 중: {st['filtered_v']}V ({st['level']})")
-        return 1
+        return 0 if b.get("source", "motor") != "motor" else 1
     bus = open_bus(cfg, Calibration())
     try:
+        sensor = b.get("source", "motor") != "motor"
         vs = {}
         for n in JOINTS:
             try:
-                vs[n] = bus.read_voltage(n) + float(cfg["battery"]["offset_v"])
+                vs[n] = bus.read_voltage(n) + (0.0 if sensor else float(b["offset_v"]))
             except dxl.DxlError:
                 pass
         if not vs:
             print("응답하는 모터가 없습니다")
             return 1
+        if sensor:
+            for n, v in vs.items():
+                print(f"  {MOTOR_ID[n]:>2} {LABEL_KO[n]:<16} {v:5.2f} V")
+            print(f"  모터 입력 중앙값 {float(np.median(list(vs.values()))):.2f} V")
+            return 0
         mon = BatteryMonitor(cfg)
         med = float(np.median(list(vs.values())))
         lvl = mon._level_for(med, OK)
@@ -244,11 +265,37 @@ def _battery_watch(cfg, args) -> int:
     mon.offset = 0.0   # offset is applied when reading the motors below
     last_level, last_msg, crit_since = OK, 0.0, None
     period = args.period
-    print(f"배터리 감시 시작 ({period:.0f}초 간격, 주의 {b['warn_v']} / 부족 {b['low_v']} / 위험 {b['critical_v']} V)", flush=True)
+    print(f"배터리 감시 시작 ({period:.0f}초 간격, {b.get('source', 'motor')}, "
+          f"주의 {b['warn_v']} / 부족 {b['low_v']} / 위험 {b['critical_v']} V)", flush=True)
+    sensor, sensor_err = None, ""
     while True:
         v = None
         st = _read_state_file(cfg)
-        if st:  # run/calib owns the bus and publishes the voltage
+        if b.get("source", "motor") != "motor":
+            # the I2C sensor does not need the motor bus, so it is read even while run/calib is active
+            try:
+                sensor = sensor or open_sensor(cfg)
+                v = sensor.read() + float(b["offset_v"])
+                sensor_err = ""
+            except Exception as e:
+                sensor = None
+                if str(e) != sensor_err:
+                    sensor_err = str(e)
+                    _notify(f"[MERO 배터리] 센서 읽기 실패: {e} — 배터리 보호 꺼짐")
+            if v is not None and not st:
+                lock = BusLock(cfg["lock_file"])
+                if lock.acquire():
+                    try:
+                        bus = open_bus(cfg, Calibration())
+                        try:
+                            bus.led(mon._level_for(v, mon.status.level) >= LOW)
+                        finally:
+                            bus.p.close()
+                    except Exception:
+                        pass
+                    finally:
+                        lock.release()
+        elif st:  # run/calib owns the bus and publishes the voltage
             v = float(st["filtered_v"])
         else:
             lock = BusLock(cfg["lock_file"])
@@ -343,5 +390,74 @@ def cmd_set_baud(args) -> int:
         print("기록함. 전원을 껐다 켤 필요는 없지만, 새 속도로 `check`를 실행해 확인하세요.")
     finally:
         bus.p.close()
+        lock.release()
+    return 0
+
+
+# ---------------------------------------------------------------------------- swap leg ids
+LEG_SWAP = [(10 + k, 20 + k) for k in range(1, 7)]      # (11,21) ... (16,26)
+
+
+def swap_ids(p: dxl.Protocol2, pairs: list[tuple[int, int]], log=print) -> None:
+    """Swap motor IDs pairwise (EEPROM) through free temporary IDs, verifying each step by ping.
+    Torque must already be off. Raises RuntimeError and stops at the first failed step."""
+    def wait_for(i: int) -> bool:
+        for _ in range(10):
+            if p.ping(i) is not None:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def move(src: int, dst: int) -> None:
+        if p.ping(dst) is not None:
+            raise RuntimeError(f"ID {dst}가 이미 있습니다 (ID {src} -> {dst} 중단)")
+        p.write(src, dxl.ADDR_ID, bytes([dst]), ack=False)
+        time.sleep(0.05)
+        if not wait_for(dst) or p.ping(src) is not None:
+            raise RuntimeError(f"ID {src} -> {dst} 확인 실패")
+        log(f"  ID {src} -> {dst}")
+
+    used = set(p.broadcast_ping())
+    need = {i for pr in pairs for i in pr}
+    if not need <= used:
+        raise RuntimeError(f"응답 없는 ID: {sorted(need - used)}")
+    free = [i for i in range(100, 200) if i not in used][:len(pairs)]
+    for (a, _), t in zip(pairs, free):
+        move(a, t)          # a -> temp
+    for a, b in pairs:
+        move(b, a)          # b -> a
+    for (_, b), t in zip(pairs, free):
+        move(t, b)          # temp -> b
+
+
+def cmd_swap_leg_ids(args) -> int:
+    """Swap left/right leg motor IDs (11-16 <-> 21-26) when they were assigned to the wrong leg."""
+    cfg = config.load(args.config)
+    lock = _locked(cfg)
+    if not lock:
+        return 1
+    bus = open_bus(cfg, Calibration())
+    p = bus.p
+    try:
+        pos = {i: struct.unpack("<i", p.read(i, dxl.ADDR_PRESENT_POSITION, 4))[0] for pr in LEG_SWAP for i in pr}
+        print("왼다리 ID 11~16 <-> 오른다리 ID 21~26 을 서로 바꿉니다 (모터 EEPROM의 ID 기록).")
+        print("확인용 현재 위치(raw): " + "  ".join(f"{a}:{pos[a]}/{b}:{pos[b]}" for a, b in LEG_SWAP))
+        if input("로봇을 움직이지 말고 두세요. 진행? [y/N] ").strip().lower() != "y":
+            return 1
+        bus.torque_off_all_robust()
+        swap_ids(p, LEG_SWAP)
+        after = {i: struct.unpack("<i", p.read(i, dxl.ADDR_PRESENT_POSITION, 4))[0] for pr in LEG_SWAP for i in pr}
+        bad = [(a, b) for a, b in LEG_SWAP
+               if abs(after[a] - pos[b]) > 20 or abs(after[b] - pos[a]) > 20]
+        if bad:
+            print(f"{term.YEL}위치로 본 교환 확인이 애매한 쌍: {bad} (그새 움직였는지 확인){term.RST}")
+        else:
+            print(f"{term.GRN}완료: 위치값까지 맞바뀐 것을 확인했습니다.{term.RST}")
+        print("다음: calibration.json의 다리 부호/원점은 예전 배선 기준입니다. calib에서 다리 관절 r(기본값) 후 다시 확인·저장하세요.")
+    except RuntimeError as e:
+        print(f"{term.RED}중단: {e}{term.RST}  `mero check`로 현재 ID를 확인하세요.")
+        return 1
+    finally:
+        p.close()
         lock.release()
     return 0

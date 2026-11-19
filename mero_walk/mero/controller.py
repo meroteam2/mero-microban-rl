@@ -8,7 +8,9 @@ from collections import deque
 import numpy as np
 
 from . import battery as bat
+from .config import resolve
 from .joints import JOINT_RANGE, JOINTS, LABEL_KO, STAND_POSE
+from .walklog import WalkLog
 
 IDLE, RAMP, STAND, WALK, STOPPING, FALLEN = "IDLE", "RAMP", "STAND", "WALK", "STOPPING", "FALLEN"
 STATE_KO = {IDLE: "토크OFF", RAMP: "서는중", STAND: "서있음", WALK: "걷는중", STOPPING: "멈추는중", FALLEN: "넘어짐"}
@@ -19,12 +21,14 @@ KT, RES, ERR_GAIN, I_MAX = 0.366, 2.811, 0.0028773775, 1.75
 
 class WalkController:
     def __init__(self, cfg: dict, bus, imu, policy, monitor: bat.BatteryMonitor, emit=print,
-                 clock=time.monotonic):
+                 clock=time.monotonic, vread=None):
         self.cfg = cfg
         self.c = cfg["control"]
         self.tp = cfg["teleop"]
         self.bus, self.imu, self.policy, self.mon = bus, imu, policy, monitor
-        self.emit = emit
+        self._emit_raw = emit
+        lc = cfg.get("log", {})
+        self.log = WalkLog(resolve(lc.get("dir", "logs")), bool(lc.get("walk", True)))
         self.now = clock
         self.state = IDLE
         self.t_state = self.now()
@@ -41,6 +45,8 @@ class WalkController:
         self.read_errors = 0
         self.vread_last = -1e9
         self.vread_idx = 0
+        self.vread = vread             # battery sensor (bat.voltage_reader); None = motor input voltage
+        self.vread_errors = 0
         self.crit_deadline: float | None = None
         self.oc_ticks = 0
         self.cmd_hist: deque = deque(maxlen=4)
@@ -50,10 +56,36 @@ class WalkController:
         self.walk_refused_reason = ""
 
     # ------------------------------------------------------------------ helpers
+    def emit(self, msg: str) -> None:
+        self.log.event(msg)
+        self._emit_raw(msg)
+
     def _set(self, state: str) -> None:
         if state != self.state:
+            old = self.state
             self.state = state
             self.t_state = self.now()
+            if old in (WALK, STOPPING) and state not in (WALK, STOPPING):
+                self.close_log(state)
+
+    def _log_row(self, obs=None, act=None) -> None:
+        if not self.log.active:
+            return
+        try:
+            imu = self.imu.latest()
+        except Exception:
+            imu = None
+        volt = self.mon.status.filtered_v if self.mon.status.samples else None
+        self.log.row(self.state, self.cmd_des, self.cmd, imu, self.q, self.dq, obs, act,
+                     self.last_targets, volt, self.read_errors)
+
+    def close_log(self, why: str = "") -> None:
+        if not self.log.active:
+            return
+        self._log_row()                      # last row carries the closing events (fall, torque off...)
+        rows = self.log.rows
+        p = self.log.close(why)
+        self._emit_raw(f"걷기 로그 저장: {p} ({rows}줄)")
 
     def _confirm(self, key: str, msg: str, window: float = 2.0) -> bool:
         t = self.now()
@@ -70,9 +102,9 @@ class WalkController:
         self.cmd[:] = 0
         self.cmd_des[:] = 0
         self.crit_deadline = None
-        self._set(IDLE)
         if reason:
-            self.emit(reason)
+            self.emit(reason)            # before the state change so the walk log still records it
+        self._set(IDLE)
 
     def _start_ramp(self, to: dict[str, float], seconds: float) -> None:
         self.ramp_from = {n: self.q.get(n, to.get(n, 0.0)) for n in JOINTS}
@@ -129,6 +161,17 @@ class WalkController:
         self.cmd_hist.clear()
         self.oc_ticks = 0
         self._set(WALK)
+        pol = self.policy
+        self.log.start(pol.order, pol.obs_size, {
+            "started": time.strftime("%Y-%m-%d %H:%M:%S"), "policy": getattr(pol, "path", ""),
+            "policy_meta": getattr(pol, "meta", {}), "order": pol.order, "obs_size": pol.obs_size,
+            "act_size": pol.act_size, "action_scale": getattr(pol, "action_scale", None),
+            "gyro_frame": pol.gyro_frame, "control": self.c, "teleop": self.tp,
+            "calibration": {n: {"sign": c.sign, "zero_deg": round(math.degrees(c.zero), 3)}
+                            for n, c in self.bus.cal.joints.items()},
+            "imu_mount_quat": list(self.bus.cal.mount_quat), "gyro_bias": list(self.bus.cal.gyro_bias),
+            "multiturn_joints": sorted(getattr(self.bus, "multiturn", [])),
+        })
         self.emit("걷기 시작 (방향키로 속도 조절, SPACE로 정지)")
 
     def stop_walk(self, reason: str = "") -> None:
@@ -205,12 +248,23 @@ class WalkController:
         if t - self.vread_last < period:
             return
         self.vread_last = t
-        name = JOINTS[self.vread_idx % len(JOINTS)]
-        self.vread_idx += 1
         try:
-            v = self.bus.read_voltage(name)
-        except Exception:
+            if self.vread is not None:
+                v = self.vread()
+            else:
+                name = JOINTS[self.vread_idx % len(JOINTS)]
+                self.vread_idx += 1
+                v = self.bus.read_voltage(name)
+        except Exception as e:
+            self.vread_errors += 1
+            if self.vread is not None:
+                self.mon.status.error = str(e)
+                if self.vread_errors in (1, 5) or self.vread_errors % 60 == 0:
+                    self.emit(f"\a⚠ 배터리 전압을 읽을 수 없습니다 ({e}): 배터리 보호 꺼짐")
             return
+        if self.vread_errors >= 5:
+            self.emit("배터리 측정 복구")
+        self.vread_errors = 0
         s = self.mon.update(v, t)
         if s.changed:
             lvl = s.level
@@ -291,51 +345,58 @@ class WalkController:
             self.bus.write_goal(self.ramp_to)
             self.last_targets = dict(self.ramp_to)
         elif st in (WALK, STOPPING):
-            s = self.imu.latest()
-            if (time.perf_counter() - s.t > 0.25 or not s.valid) and self.stop_phase == 0:
-                # no fresh IMU: the policy would act on stale tilt -> go straight to the stand pose
-                self.emit("IMU 데이터가 끊겼습니다: 바로 서는 자세로 전환")
-                self._set(STOPPING)
-                self.stop_phase = 1
-                self.ramp_from = {n: self.last_targets.get(n, STAND_POSE[n]) for n in self.policy.order}
-                self.bus.set_kp(int(self.c["kp_stand"]))
-                self.cmd_des[:] = 0
-            if s.proj_grav[2] > float(self.c["fall_gravity_z"]):
-                if self.c.get("torque_off_on_fall", True):
-                    self.torque_off("넘어짐 감지: 토크 OFF. 로봇을 세운 뒤 t")
-                    self._set(FALLEN)
-                else:
-                    self._set(FALLEN)
-                    self.emit("넘어짐 감지: 정책 정지")
-                return
-            # rate-limit the command (m/s^2, rad/s^2)
-            lim = np.array([0.5, 0.5, 2.0]) * dt
-            want = self.cmd_des if st == WALK else np.zeros(3)
-            self.cmd += np.clip(want - self.cmd, -lim, lim)
-            if st == STOPPING and self.stop_phase == 1:
-                a = min((t - self.t_state) / 0.6, 1.0)
-                tgt = {n: self.ramp_from[n] + a * (STAND_POSE[n] - self.ramp_from[n]) for n in self.ramp_from}
+            stepped = False
+            try:
+                s = self.imu.latest()
+                if (time.perf_counter() - s.t > 0.25 or not s.valid) and self.stop_phase == 0:
+                    # no fresh IMU: the policy would act on stale tilt -> go straight to the stand pose
+                    self.emit("IMU 데이터가 끊겼습니다: 바로 서는 자세로 전환")
+                    self._set(STOPPING)
+                    self.stop_phase = 1
+                    self.ramp_from = {n: self.last_targets.get(n, STAND_POSE[n]) for n in self.policy.order}
+                    self.bus.set_kp(int(self.c["kp_stand"]))
+                    self.cmd_des[:] = 0
+                if s.proj_grav[2] > float(self.c["fall_gravity_z"]):
+                    if self.c.get("torque_off_on_fall", True):
+                        self.torque_off("넘어짐 감지: 토크 OFF. 로봇을 세운 뒤 t")
+                        self._set(FALLEN)
+                    else:
+                        self._set(FALLEN)
+                        self.emit("넘어짐 감지: 정책 정지")
+                    return
+                # rate-limit the command (m/s^2, rad/s^2)
+                lim = np.array([0.5, 0.5, 2.0]) * dt
+                want = self.cmd_des if st == WALK else np.zeros(3)
+                self.cmd += np.clip(want - self.cmd, -lim, lim)
+                if st == STOPPING and self.stop_phase == 1:
+                    a = min((t - self.t_state) / 0.6, 1.0)
+                    tgt = {n: self.ramp_from[n] + a * (STAND_POSE[n] - self.ramp_from[n]) for n in self.ramp_from}
+                    self.bus.write_goal(tgt)
+                    self.last_targets = tgt
+                    if a >= 1.0:
+                        self.ramp_to = dict(STAND_POSE)
+                        self._set(STAND)
+                        self.emit("정지 완료 (서 있음)")
+                        if self.lost:
+                            self.quit = True
+                    return
+                gyro = s.gyro_imu if self.policy.gyro_frame == "imu" else s.gyro_body
+                tgt = self.policy.step(gyro, s.proj_grav, self.q, self.dq, self.cmd)
+                stepped = True
+                if st == WALK and self._overcurrent(tgt):
+                    return
+                self.cmd_hist.append(dict(tgt))
                 self.bus.write_goal(tgt)
                 self.last_targets = tgt
-                if a >= 1.0:
-                    self.ramp_to = dict(STAND_POSE)
-                    self._set(STAND)
-                    self.emit("정지 완료 (서 있음)")
-                    if self.lost:
-                        self.quit = True
-                return
-            gyro = s.gyro_imu if self.policy.gyro_frame == "imu" else s.gyro_body
-            tgt = self.policy.step(gyro, s.proj_grav, self.q, self.dq, self.cmd)
-            if st == WALK and self._overcurrent(tgt):
-                return
-            self.cmd_hist.append(dict(tgt))
-            self.bus.write_goal(tgt)
-            self.last_targets = tgt
-            if st == STOPPING and t - self.t_state >= float(self.c["stop_settle_s"]) and np.all(np.abs(self.cmd) < 1e-3):
-                self.stop_phase = 1
-                self.ramp_from = dict(tgt)
-                self.bus.set_kp(int(self.c["kp_stand"]))
-                self.t_state = t
+                if st == STOPPING and t - self.t_state >= float(self.c["stop_settle_s"]) and np.all(np.abs(self.cmd) < 1e-3):
+                    self.stop_phase = 1
+                    self.ramp_from = dict(tgt)
+                    self.bus.set_kp(int(self.c["kp_stand"]))
+                    self.t_state = t
+            finally:
+                pol = self.policy
+                self._log_row(getattr(pol, "last_obs", None) if stepped else None,
+                              pol.last_action if stepped else None)
 
     def status_text(self, hz: float) -> str:
         s = self.imu.latest()

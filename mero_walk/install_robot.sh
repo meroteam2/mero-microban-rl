@@ -8,7 +8,7 @@ USER_NAME="${SUDO_USER:-$(id -un)}"
 echo "== Python: $PY"
 "$PY" -c "import sys; print(sys.version)"
 missing=$("$PY" - <<'PYEOF'
-import importlib
+import importlib.util
 need = {"numpy": "numpy", "onnxruntime": "onnxruntime", "serial": "pyserial", "smbus2": "smbus2"}
 print(" ".join(p for m, p in need.items() if importlib.util.find_spec(m) is None))
 PYEOF

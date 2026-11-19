@@ -16,6 +16,8 @@ from .joints import POLICY_ORDER_DEFAULT
 
 class WalkPolicy:
     def __init__(self, path: str, gyro_frame: str = "imu"):
+        self.path = str(path)
+        self.last_obs = None
         import onnxruntime as ort
         so = ort.SessionOptions()
         so.intra_op_num_threads = 1
@@ -79,6 +81,7 @@ class WalkPolicy:
     def step(self, gyro, proj_grav, q, dq, cmd) -> dict[str, float]:
         obs = self.build_obs(gyro, proj_grav, q, dq, cmd)
         act = self.sess.run(None, {self.input_name: obs[None, :]})[0][0].astype(np.float32)
+        self.last_obs = obs               # kept for the walk log
         self.last_action = act
         tgt = self.default + act * self.action_scale
         return {j: float(tgt[k]) for k, j in enumerate(self.order)}

@@ -2,7 +2,7 @@
 """MERO digital twin viewer (runs on the laptop).
 
 Connects to `python -m mero calib` (or `run`) on the robot, which streams joint
-angles and IMU tilt at ~20 Hz, and shows the robot in Gazebo or MuJoCo:
+angles and IMU tilt (calib: every bus read, ~30 Hz at 115200 bps), and shows the robot in Gazebo or MuJoCo:
   - solid model  = real robot (measured joints, trunk tilted by the IMU)
   - cyan ghost   = reference pose (calib 'z' mode) or jog target (calib 'j' mode)
   - orange ball  = selected joint (Gazebo)
@@ -224,7 +224,14 @@ class GazeboBackend:
         self.node.request(self.svc, req, self.Pose_V, self.Boolean, 50)
         sel = msg.get("selected")
         if sel and self.marker_ok:
-            self._marker(self.kin.joint_anchor(sel))
+            # the marker request blocks (up to 30 ms) - only send it when the ball actually moves
+            pos = self.kin.joint_anchor(sel)
+            now = time.monotonic()
+            last = getattr(self, "_marker_last", None)
+            if (last is None or sel != last[0]
+                    or (np.linalg.norm(pos - last[1]) > 0.002 and now - last[2] > 0.1)):
+                self._marker_last = (sel, pos, now)
+                self._marker(pos)
 
     def _marker(self, pos) -> None:
         m = self.Marker()
@@ -264,7 +271,7 @@ class MujocoBackend:
         self.v = mujoco.viewer.launch_passive(kin.m, kin.d_live, show_left_ui=False, show_right_ui=False)
         self.v.cam.lookat[:] = [0, 0, BASE_Z - 0.02]
         self.v.cam.distance = 0.75
-        self.v.cam.azimuth = 135
+        self.v.cam.azimuth = 45     # from behind-right: robot's left leg on the screen's left
         self.v.cam.elevation = -15
         self.opt = mujoco.MjvOption()
         self.opt.geomgroup[:] = 0
@@ -307,7 +314,7 @@ def main() -> int:
     ap.add_argument("--viewer", choices=["gazebo", "mujoco"], default="gazebo")
     ap.add_argument("--no-launch", action="store_true", help="이미 떠 있는 gz sim에 붙기")
     ap.add_argument("--demo", action="store_true", help="로봇 없이 가짜 움직임으로 뷰어만 확인")
-    ap.add_argument("--hz", type=float, default=30.0)
+    ap.add_argument("--hz", type=float, default=100.0, help="새 프레임 확인 주기(그리기는 새 프레임이 올 때만)")
     ap.add_argument("--render-engine", default="ogre2", choices=["ogre2", "ogre"],
                     help="WSL에서 화면이 안 나오면 ogre")
     a = ap.parse_args()
@@ -323,11 +330,15 @@ def main() -> int:
           else MujocoBackend(kin))
     period = 1.0 / a.hz
     last_print = 0.0
+    shown = -1
     try:
         while be.alive():
             t0 = time.time()
             msg = src.latest()
-            if msg:
+            # redraw only on a new robot frame: polling a ~30 Hz stream at a fixed 30 Hz showed
+            # each frame for an uneven 1 or 2 ticks (judder)
+            if msg and src.frames != shown:
+                shown = src.frames
                 has_ghost = kin.update(msg, src.joints)
                 be.update(msg, has_ghost)
             if t0 - last_print > 1.0:

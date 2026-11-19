@@ -141,6 +141,8 @@ class Protocol2:
         self.byte_time = 10.0 / baud
         self.margin_s = margin_s
         self._buf = bytearray()
+        self._tx_start = 0.0          # when the last packet starts going out on the wire
+        self._tx_end = 0.0            # when the wire is free again (writes return before that)
         self.tx_bytes = 0
         self.rx_bytes = 0
         self.hw_alerts: dict[int, int] = {}   # id -> last status error byte with bit 7 set
@@ -157,9 +159,15 @@ class Protocol2:
         self._buf.clear()
         self.ser.write(pkt)
         self.tx_bytes += len(pkt)
+        # write() returns once the bytes are queued, not sent: a packet sent right after an
+        # unanswered one (sync write of 19 goals = ~9.5 ms at 115200) waits behind it
+        now = time.perf_counter()
+        self._tx_start = max(now, self._tx_end)
+        self._tx_end = self._tx_start + len(pkt) * self.byte_time
 
     def _deadline(self, tx: int, rx: int) -> float:
-        return time.perf_counter() + (tx + rx) * self.byte_time * 1.25 + self.margin_s
+        """Response deadline for the packet just sent (counts from when it actually goes out)."""
+        return max(time.perf_counter(), self._tx_start) + (tx + rx) * self.byte_time * 1.25 + self.margin_s
 
     def _fill(self, n: int, deadline: float) -> None:
         while len(self._buf) < n:
