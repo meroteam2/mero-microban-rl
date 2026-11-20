@@ -1,0 +1,150 @@
+{
+  "started": "2026-11-19 08:18:59",
+  "policy": "/home/orangepi/mero_walk/models/walk.onnx",
+  "policy_meta": {
+    "action_scale": "1.0",
+    "command_names": "twist",
+    "joint_damping": "0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000",
+    "observation_names": "base_ang_vel,projected_gravity,joint_pos,joint_vel,actions,command",
+    "joint_stiffness": "1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000,1.000",
+    "default_joint_pos": "0.000,0.000,-0.175,-0.349,0.000,-0.087,-0.175,0.000,0.000,0.087,0.000,0.175,-0.349,0.000,0.087,-0.175,0.000,0.000,-0.087",
+    "joint_names": "head,right_shoulder_pitch,right_shoulder_roll,right_elbow,right_hip_yaw,right_hip_roll,right_hip_pitch,right_knee,right_ankle_pitch,right_ankle_roll,left_shoulder_pitch,left_shoulder_roll,left_elbow,left_hip_yaw,left_hip_roll,left_hip_pitch,left_knee,left_ankle_pitch,left_ankle_roll",
+    "run_path": "2026-06-26_16-03-28"
+  },
+  "order": [
+    "right_shoulder_pitch",
+    "right_shoulder_roll",
+    "right_elbow",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle_pitch",
+    "right_ankle_roll",
+    "left_shoulder_pitch",
+    "left_shoulder_roll",
+    "left_elbow",
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle_pitch",
+    "left_ankle_roll"
+  ],
+  "obs_size": 63,
+  "act_size": 18,
+  "action_scale": 1.0,
+  "gyro_frame": "imu",
+  "control": {
+    "hz": 30,
+    "kp_stand": 620,
+    "kp_walk": 190,
+    "ramp_s": 2.0,
+    "stop_settle_s": 1.0,
+    "fall_gravity_z": -0.5,
+    "torque_off_on_fall": true,
+    "overcurrent_a": 15.0
+  },
+  "teleop": {
+    "vx_step": 0.05,
+    "vx_max": 0.3,
+    "vx_min": -0.2,
+    "vy_step": 0.05,
+    "vy_max": 0.15,
+    "wz_step": 0.2,
+    "wz_max": 1.0
+  },
+  "calibration": {
+    "left_hip_yaw": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "left_hip_roll": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    },
+    "left_hip_pitch": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    },
+    "left_knee": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "left_ankle_pitch": {
+      "sign": -1.0,
+      "zero_deg": -16.172
+    },
+    "left_ankle_roll": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "right_hip_yaw": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "right_hip_roll": {
+      "sign": -1.0,
+      "zero_deg": -12.0
+    },
+    "right_hip_pitch": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "right_knee": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    },
+    "right_ankle_pitch": {
+      "sign": 1.0,
+      "zero_deg": -1.0
+    },
+    "right_ankle_roll": {
+      "sign": -1.0,
+      "zero_deg": 3.0
+    },
+    "left_shoulder_pitch": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    },
+    "left_shoulder_roll": {
+      "sign": -1.0,
+      "zero_deg": 90.0
+    },
+    "left_elbow": {
+      "sign": -1.0,
+      "zero_deg": 0.0
+    },
+    "right_shoulder_pitch": {
+      "sign": -1.0,
+      "zero_deg": -180.0
+    },
+    "right_shoulder_roll": {
+      "sign": -1.0,
+      "zero_deg": -180.0
+    },
+    "right_elbow": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    },
+    "head": {
+      "sign": 1.0,
+      "zero_deg": 0.0
+    }
+  },
+  "imu_mount_quat": [
+    0.5,
+    0.5,
+    -0.5,
+    -0.5
+  ],
+  "gyro_bias": [
+    -0.008714,
+    0.006995,
+    0.002647
+  ],
+  "multiturn_joints": [
+    "right_shoulder_pitch",
+    "right_shoulder_roll"
+  ]
+}
