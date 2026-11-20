@@ -8,9 +8,16 @@ from collections import deque
 import numpy as np
 
 from . import battery as bat
+from .calibration import UPSTREAM_MOUNT
 from .config import resolve
+from .imu import quat_to_mat
 from .joints import JOINT_RANGE, JOINTS, LABEL_KO, STAND_POSE
 from .walklog import WalkLog
+
+# Frame of the gyro the upstream walk.onnx was trained on: the MJCF `imu` site, i.e. the chip as
+# Rhoban mounted it. Our chip can sit differently (calibrated mount_quat), so rotate the trunk-frame
+# gyro into that frame instead of passing our raw chip axes.
+_R_UPSTREAM_IMU = quat_to_mat(np.array(UPSTREAM_MOUNT, float))
 
 IDLE, RAMP, STAND, WALK, STOPPING, FALLEN = "IDLE", "RAMP", "STAND", "WALK", "STOPPING", "FALLEN"
 STATE_KO = {IDLE: "토크OFF", RAMP: "서는중", STAND: "서있음", WALK: "걷는중", STOPPING: "멈추는중", FALLEN: "넘어짐"}
@@ -380,7 +387,7 @@ class WalkController:
                         if self.lost:
                             self.quit = True
                     return
-                gyro = s.gyro_imu if self.policy.gyro_frame == "imu" else s.gyro_body
+                gyro = _R_UPSTREAM_IMU.T @ s.gyro_body if self.policy.gyro_frame == "imu" else s.gyro_body
                 tgt = self.policy.step(gyro, s.proj_grav, self.q, self.dq, self.cmd)
                 stepped = True
                 if st == WALK and self._overcurrent(tgt):

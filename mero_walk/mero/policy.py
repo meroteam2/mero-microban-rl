@@ -15,7 +15,7 @@ from .joints import POLICY_ORDER_DEFAULT
 
 
 class WalkPolicy:
-    def __init__(self, path: str, gyro_frame: str = "imu"):
+    def __init__(self, path: str, gyro_frame: str = "imu", prefer_meta: bool = False):
         self.path = str(path)
         self.last_obs = None
         import onnxruntime as ort
@@ -49,6 +49,10 @@ class WalkPolicy:
         if self.obs_size not in (base, base + 2):
             raise ValueError(f"unexpected observation size {self.obs_size} (expected {base} or {base + 2})")
         self.use_phase = self.obs_size == base + 2
+        # Our own exports record the gyro frame they were trained with; use it unless told otherwise.
+        self.gyro_from_meta = prefer_meta and meta.get("gyro_frame") in ("imu", "body")
+        if self.gyro_from_meta:
+            gyro_frame = meta["gyro_frame"]
         if gyro_frame not in ("imu", "body"):
             raise ValueError("gyro_frame must be 'imu' or 'body'")
         self.gyro_frame = gyro_frame

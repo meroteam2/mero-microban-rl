@@ -85,3 +85,20 @@ def test_solve_mount_flags_mirrored_axis():
     mirrored = {k: v * np.array([1, -1, 1]) for k, v in samples.items()}
     res = solve_mount(mirrored)
     assert res["improper"]
+
+
+def test_walk_onnx_gyro_with_non_upstream_mount():
+    """Our chip is mounted (0.5,0.5,-0.5,-0.5), not like upstream: walk.onnx must still get the
+    gyro in the upstream MJCF imu-site frame, not our raw chip axes."""
+    from mero import controller
+    ours = (0.5, 0.5, -0.5, -0.5)
+    p = Plant()
+    _set_tilt(p, (0, 0, 1), 0)
+    p.d.qvel[3:6] = [0.3, -0.7, 1.1]          # roll, pitch, yaw rate (trunk frame here)
+    mujoco.mj_forward(p.m, p.d)
+    r = ImuReader(FakeImuDevice(p, true_mount=ours), ImuFrames(ours))
+    r.step(0.005)
+    s = r.latest()
+    site_gyro = p.d.sensordata[p.s_gyr:p.s_gyr + 3]               # what upstream's chip would read
+    assert not np.allclose(s.gyro_imu, site_gyro, atol=1e-3)       # raw chip axes differ...
+    assert np.allclose(controller._R_UPSTREAM_IMU.T @ s.gyro_body, site_gyro, atol=1e-6)   # ...the fed value does not

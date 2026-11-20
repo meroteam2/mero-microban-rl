@@ -6,13 +6,16 @@
 Columns: time and state, commands, IMU, all 19 joint angles/velocities (sim convention),
 the policy's observation vector and raw action, the joint targets written to the motors,
 battery voltage, read errors and any status message ("event") emitted on that tick.
-Rows are flushed every second and fsynced on close (power can drop without warning).
+The robot can lose power mid-walk, so the files are made durable as they are written: the
+directory entry right away, then the rows every second (fsync on a background thread, so a slow
+SD card never stalls the control loop).
 """
 from __future__ import annotations
 
 import json
 import math
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -30,6 +33,26 @@ def _fmt(v) -> str:
     return "" if math.isnan(f) else f"{f:.6g}"
 
 
+def _fsync_quiet(fd: int) -> None:
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+
+
+def _fsync_dir(d: Path) -> None:
+    try:
+        fd = os.open(d, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 class WalkLog:
     def __init__(self, directory: str | Path, enabled: bool = True):
         self.dir = Path(directory)
@@ -42,6 +65,7 @@ class WalkLog:
         self._events: list[str] = []
         self._order: list[str] = []
         self._obs_n = 0
+        self._sync: threading.Thread | None = None
 
     @property
     def active(self) -> bool:
@@ -59,8 +83,10 @@ class WalkLog:
             self.path = self.dir / f"walk_{stamp}_{k}.csv"
             k += 1
         self._order, self._obs_n = list(order), int(obs_n)
-        self.path.with_suffix(".json").write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=str),
-                                                  encoding="utf-8")
+        with open(self.path.with_suffix(".json"), "w", encoding="utf-8") as jf:
+            jf.write(json.dumps(meta, indent=2, ensure_ascii=False, default=str))
+            jf.flush()
+            os.fsync(jf.fileno())       # the robot can lose power mid-walk; keep which policy this was
         cols = (["t", "state", "cmd_des_vx", "cmd_des_vy", "cmd_des_wz", "cmd_vx", "cmd_vy", "cmd_wz",
                  "imu_age_ms", "imu_valid"]
                 + [f"acc_{a}" for a in "xyz"] + [f"gyro_imu_{a}" for a in "xyz"]
@@ -72,6 +98,9 @@ class WalkLog:
                 + ["volt", "read_errors", "event"])
         self.f = open(self.path, "w", encoding="utf-8", buffering=1 << 16)
         self.f.write(",".join(cols) + "\n")
+        self.f.flush()
+        os.fsync(self.f.fileno())
+        _fsync_dir(self.dir)            # without this a power cut can drop the new files entirely
         self.rows = 0
         self._t0 = self._last_flush = time.monotonic()
         self._events.clear()
@@ -106,11 +135,17 @@ class WalkLog:
         if now - self._last_flush > 1.0:
             self._last_flush = now
             self.f.flush()
+            if self._sync is None or not self._sync.is_alive():
+                self._sync = threading.Thread(target=_fsync_quiet, args=(self.f.fileno(),), daemon=True)
+                self._sync.start()
 
     def close(self, why: str = "") -> Path | None:
         if self.f is None:
             return None
         f, self.f = self.f, None
+        if self._sync is not None:
+            self._sync.join(timeout=2.0)
+            self._sync = None
         try:
             f.flush()
             os.fsync(f.fileno())

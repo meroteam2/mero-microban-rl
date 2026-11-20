@@ -60,8 +60,9 @@ def main(args) -> int:
         lock.release()
         return 1
     pol_path = config.resolve(cfg["policy"]["path"])
-    policy = WalkPolicy(str(pol_path), cfg["policy"]["gyro_frame"])
-    print(f"  정책 {pol_path.name}: 관측 {policy.obs_size}, 행동 {policy.act_size}, gyro={policy.gyro_frame}")
+    policy = WalkPolicy(str(pol_path), cfg["policy"]["gyro_frame"], prefer_meta=not args.gyro_frame)
+    src = "정책 메타데이터" if policy.gyro_from_meta else ("--gyro-frame" if args.gyro_frame else "config")
+    print(f"  정책 {pol_path.name}: 관측 {policy.obs_size}, 행동 {policy.act_size}, gyro={policy.gyro_frame} ({src})")
     mon = BatteryMonitor(cfg)
     vread = voltage_reader(cfg)
     stream = None

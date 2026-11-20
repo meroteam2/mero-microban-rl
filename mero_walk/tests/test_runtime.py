@@ -1,5 +1,6 @@
 """Closed-loop runtime tests on the MuJoCo plant through the byte-level fake bus."""
 import math
+from pathlib import Path
 import numpy as np
 import pytest
 from mero import term, battery as bat
@@ -172,3 +173,15 @@ def test_walk_log_closed_on_torque_off(tmp_path):
     assert not r.ctl.log.active
     rows = list(csv.DictReader(open(next(tmp_path.glob("walk_*.csv")), encoding="utf-8")))
     assert rows and rows[-1]["event"] != ""                        # last row carries the stop message
+
+
+def test_policy_gyro_frame_from_metadata():
+    from mero.policy import WalkPolicy
+    models = Path(__file__).resolve().parent.parent / "models"
+    dr = models / "mero_walk_dr.onnx"
+    if not dr.exists():
+        pytest.skip("mero_walk_dr.onnx not present")
+    assert WalkPolicy(str(dr), "imu", prefer_meta=True).gyro_frame == "body"
+    assert WalkPolicy(str(dr), "imu", prefer_meta=False).gyro_frame == "imu"      # --gyro-frame wins
+    up = WalkPolicy(str(models / "walk.onnx"), "imu", prefer_meta=True)          # no gyro_frame in metadata
+    assert up.gyro_frame == "imu" and not up.gyro_from_meta
