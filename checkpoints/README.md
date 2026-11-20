@@ -8,6 +8,7 @@
 | `stand_model_299.pt` | `Microban-Stand` | `microban_stand/2026-10-30_11-37-20/model_299.pt` | 300 iteration, 넘어짐 0 |
 | `crawl_arms2_model_5497.pt` | `Microban-Crawl-Arms-2` | `microban_crawl_arms/2026-11-04_11-43-11/model_5497.pt` | 0.191 m/s, 비대칭 0.002 rad |
 | `getup5_model_2500.pt` | `Microban-GetUp-5` | `microban_getup/2026-11-16_21-07-16_getup5/model_2500.pt` | 일어나기 성공 100%, walk.onnx 전환 100% |
+| `walk_dr2_model_1400.pt` | `Microban-Walk-DR2` | `microban_walk/2026-11-20_10-34-35_dr2/model_1400.pt` | DR model_1000 → 저전류 미세조정 (서 있기 0.83 A, 밀기 넘어짐 3.5%). ONNX: `mero_walk/models/mero_walk_dr2.onnx` (실물 권장) |
 | `walk_dr_model_1000.pt` | `Microban-Walk-DR` | `microban_walk/2026-11-20_06-29-45_dr/model_1000.pt` | walk.onnx 초기화 + 바닥 DR·백래시 미세조정, 밀기 넘어짐 2.5% (ONNX: `mero_walk/models/mero_walk_dr.onnx`) |
 
 재생 예 (`microban_rl/` 에서):

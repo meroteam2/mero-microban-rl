@@ -352,3 +352,54 @@ def microban_walk_dr_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg.max_iterations = 2000
   cfg.run_name = "dr"
   return cfg
+
+
+##
+# Microban-Walk-DR2: low-current fine-tune (real robot runs, 2026-11-20).
+##
+
+# XL330 torque constant (microban BAM constants) for the motor-current proxy.
+XL330_KT = 0.366  # Nm/A
+
+
+def no_stepping(env: ManagerBasedRlEnv, command_threshold: float = 0.02) -> torch.Tensor:
+  """Feet in the air while the command is ~0 (mjlab_microban `no_stepping_penalty`)."""
+  cmd = env.command_manager.get_command("twist")
+  assert cmd is not None
+  still = (torch.norm(cmd[:, :2], dim=1) + cmd[:, 2].abs()) < command_threshold
+  found = env.scene["feet_ground_contact"].data.found
+  return (found <= 0).float().sum(1) * still.float()
+
+
+def motor_current(env: ManagerBasedRlEnv) -> torch.Tensor:
+  """Sum over all motors of |torque| / kt (A): proxy of the regulator load."""
+  return env.scene["robot"].data.actuator_force.abs().sum(1) / XL330_KT
+
+
+def microban_walk_dr2_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Microban-Walk-DR plus, from the real MERO runs:
+
+  * The 5 V regulator browns out (robot reboots while walking or even standing) and loaded
+    joints sag: walking needs ~4 A mean / 6-7 A peaks of motor current in sim, and DR
+    model_1000 steps in place at zero command (3.5 A vs 0.9 A for walk.onnx). So:
+    no_stepping (-1, feet off the ground at zero command), motor_current (-0.1 per A),
+    20 % zero commands.
+  * XL330 at 5 V: datasheet stall torque 0.52 Nm (sim limit 0.64 Nm), supply sagging to
+    ~4.6 V under load: torque limit x0.6..0.95.
+  """
+  cfg = microban_walk_env_cfg(play=play, dr_on=True)
+  act = cfg.scene.entities["robot"].articulation.actuators[0]
+  assert isinstance(act, BacklashPdActuatorCfg)
+  act.effort_scale_range = (0.6, 0.95)
+  cfg.rewards["no_stepping"] = RewardTermCfg(func=no_stepping, weight=-1.0)
+  cfg.rewards["motor_current"] = RewardTermCfg(func=motor_current, weight=-0.1)
+  if not play:
+    cfg.commands["twist"].rel_standing_envs = 0.2
+  return cfg
+
+
+def microban_walk_dr2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = microban_walk_dr_ppo_runner_cfg()
+  cfg.max_iterations = 1000
+  cfg.run_name = "dr2"
+  return cfg

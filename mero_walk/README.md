@@ -172,6 +172,14 @@ mero run --policy models/our_walk.onnx --gyro-frame body
 mero run --policy models/mero_walk_dr.onnx --gyro-frame body     # config.json: control.hz 30, kp_walk 190
 ```
 
+**권장: `models/mero_walk_dr2.onnx` (저전류, 2026-11-20).** 실물 로그(아래)에서 5 V 레귤레이터가 걷는 중·서 있는 중에도 꺼지고, 하중을 받는 관절(오른쪽 무릎·발목 롤·고관절 롤)이 처졌습니다. `mero_walk_dr.onnx`는 속도 0에서도 제자리걸음을 해서 시뮬 추정 모터 전류가 3.5 A(walk.onnx 0.9 A)였고, 실물에서 1초 만에 오른쪽 무릎이 꺾이며 넘어졌습니다(`081938`). DR2는 속도 0이면 두 발을 붙이고 서고(0.8 A), 걸을 때 전류를 20–25 % 줄였고(2.9–3.6 A), 모터 토크 한계를 ×0.6–0.95로 낮춰 학습했습니다. 대신 느립니다(명령 0.1/0.2 → 0.07/0.12 m/s, 뒤로는 거의 안 감). `config.5v.example.json`이 이 정책을 씁니다.
+
+```bash
+mero run --policy models/mero_walk_dr2.onnx      # gyro_frame=body 는 메타데이터에서 자동. 처음엔 vx ≤ 0.2
+```
+
+- **레귤레이터(UBEC) 정격 전류를 확인하세요.** 시뮬 추정으로 걷기는 모터만 평균 3–4.5 A, 제어 스텝 기준 순간 5–6 A 이상입니다(실제 순간 전류는 더 큼). 3 A급 UBEC면 전압이 꺼지고 오렌지파이가 재부팅되는 증상이 그대로 납니다. 8–10 A 이상 UBEC, 또는 오렌지파이를 별도 전원으로 분리하는 것을 권장합니다.
+
 - mjlab에서 내보낸 ONNX의 메타데이터(`joint_names`, `default_joint_pos`, `action_scale`)를 읽어 관절 순서와 기본 자세를 맞춥니다. 관측 63개(위상 포함 65개) 형식이어야 합니다.
 - **`gyro_frame`이 중요합니다.** 업스트림 `walk.onnx`는 MJCF `imu` 사이트 기준 자이로(`imu`)를 받습니다. 우리 MJLab 환경처럼 몸통 기준 `base_ang_vel`로 학습했다면 `body`.
 - 학습 쪽 모터 게인이 다르면 `config.json`의 `control.kp_walk`(레지스터 값, 125 ≈ 0.28 Nm/rad)를 맞추세요.

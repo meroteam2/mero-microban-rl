@@ -1,7 +1,7 @@
 """Microban tasks for MJLab.
 
 Importing this package registers the ``Microban-Stand``, ``Microban-Crawl``,
-``Microban-Crawl-CPG``, ``Microban-Crawl-Arms``, ``Microban-Crawl-Arms-2``, ``Microban-GetUp``, ``Microban-GetUp-2``, ``Microban-GetUp-3``, ``Microban-GetUp-4``, ``Microban-GetUp-5``, ``Microban-Walk`` and ``Microban-Walk-DR``
+``Microban-Crawl-CPG``, ``Microban-Crawl-Arms``, ``Microban-Crawl-Arms-2``, ``Microban-GetUp``, ``Microban-GetUp-2``, ``Microban-GetUp-3``, ``Microban-GetUp-4``, ``Microban-GetUp-5``, ``Microban-Walk``, ``Microban-Walk-DR`` and ``Microban-Walk-DR2``
 tasks with MJLab.
 """
 
@@ -131,6 +131,8 @@ register_mjlab_task(
 )
 
 from microban_rl.walk_env_cfg import (  # noqa: E402
+  microban_walk_dr2_env_cfg,
+  microban_walk_dr2_ppo_runner_cfg,
   microban_walk_dr_env_cfg,
   microban_walk_dr_ppo_runner_cfg,
   microban_walk_env_cfg,
@@ -149,4 +151,11 @@ register_mjlab_task(
   env_cfg=microban_walk_dr_env_cfg(),
   play_env_cfg=microban_walk_dr_env_cfg(play=True),
   rl_cfg=microban_walk_dr_ppo_runner_cfg(),
+)
+
+register_mjlab_task(
+  task_id="Microban-Walk-DR2",
+  env_cfg=microban_walk_dr2_env_cfg(),
+  play_env_cfg=microban_walk_dr2_env_cfg(play=True),
+  rl_cfg=microban_walk_dr2_ppo_runner_cfg(),
 )

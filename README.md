@@ -9,8 +9,8 @@ PPO(rsl-rl)로 학습하는 환경입니다.
   → [포복 태스크](#포복-태스크-최종-microban-crawl-arms-2), 영상 `~/mero/videos/crawl.mp4`
 - **`Microban-GetUp-5` + walk.onnx (일어나기 → 보행)**: 엎드린 자세에서 키프레임을 참조해 일어난 뒤 microban 의 walk.onnx 로 걷기
   → [일어나기 → 보행](#일어나기--보행-최종-microban-getup-5-model_2500--walkonnx), 영상 `~/mero/videos/getup_walk.mp4`
-- **`Microban-Walk-DR` (실물 MERO 보행)**: walk.onnx 로 actor 를 초기화하고 30 Hz·5 V 게인·바닥 DR·기어 백래시 환경에서 미세조정
-  → [보행](#보행-최종-microban-walk-dr-walkonnx-초기화--미세조정), ONNX `mero_walk/models/mero_walk_dr.onnx`
+- **`Microban-Walk-DR2` (실물 MERO 보행)**: walk.onnx 로 actor 를 초기화하고 30 Hz·5 V 게인·바닥 DR·기어 백래시 환경에서 미세조정한 뒤, 실물 로그 분석에 따라 저전류로 다시 미세조정
+  → [보행](#보행-최종-microban-walk-dr-walkonnx-초기화--미세조정), ONNX `mero_walk/models/mero_walk_dr2.onnx`
 
 ## 폴더 구조
 
@@ -61,6 +61,7 @@ PPO(rsl-rl)로 학습하는 환경입니다.
     │   ├── init_from_walk_onnx.py ← walk.onnx 가중치로 Walk 체크포인트 만들기 (자이로 프레임 변환)
     │   ├── export_walk_onnx.py   ← 보행 정책 평가 (명령별 넘어짐·속도, 밀기/최악 DR) + mero_walk 용 ONNX
     │   ├── check_walk_env.py, probe_walk.py ← 보행 환경 점검 (관측 형식, DR 적용) / 한 env 추적 출력
+    │   ├── walk_pitch.py         ← 걷는 중 피치·모터 전류·관절 추종 (실물 로그와 비교용)
     │   ├── make_getup_back_init.py ← 누운 일어나기 에디터 시작 파일 (init/getup_back_init.lz4)
     │   └── analysis/             ← 일회성 분석 스크립트 (엎드린/누운 가능성, 키프레임 자세 계산, 대칭 점검)
     ├── data/                     ← 일어나기 학습용 키프레임 복사본, 참조 궤적 (getup_reference.npz)
@@ -586,6 +587,36 @@ model_1000 속도 추종 (기본 조건, 뒤 2/3 평균):
 - 밀기와 최악 DR 이 겹치면 둘 다 30 % 정도 넘어집니다 (가장 약한 모터·미끄러운 바닥에 강한 밀기).
 - 실물 전 확인할 것: 30 Hz 실제 주기·지연 (`mero bench`), 5 V 에서의 실제 kp (190 레지스터 ≈ 0.275 Nm/rad 가정), 관절 유격 실측.
 
+### 실물 결과와 저전류 미세조정 (`Microban-Walk-DR2`, 2026-11-20)
+
+실물 걷기 로그 (`mero_walk/logs/`, 런 구분은 `mero_walk/logs/README.md`) 분석:
+
+| 증상 | 로그 근거 | 원인 |
+| --- | --- | --- |
+| walk.onnx 가 피치 10° → 20° 출렁인 뒤 뒤로 넘어짐 | 자이로 수정 전 런 6개 | IMU 칩 장착이 업스트림과 달라 walk.onnx 입력 자이로 x·y 부호가 뒤집힘 (기대값과 상관 −0.99/−0.98). 런타임에서 수정됨 (`429fc1d`) |
+| 수정 후 walk.onnx 가 서 있을 때 앞으로 15–20° (시뮬 12°) | `081758`, `082346`, `082003` | 발목 피치가 목표보다 −7 ~ −12° 처짐 (오른쪽이 더) |
+| 걸으면 오른쪽으로 22–27° 기욺, kp_walk 220 에서 오른발로 체중이 넘어가며 넘어짐 | `081935`, `081954`, `082003` | 오른쪽 발목 롤·고관절 롤이 똑바로 서 있을 때도 왼쪽보다 3–15° 더 처짐 (q − 목표는 엔코더 기준이라 원점과 무관한 힘 부족) |
+| `mero_walk_dr.onnx` 1초 만에 오른쪽 44° | `081938` | 관측은 학습 분포 안 (첫 10 스텝 \|z\| 0.2–0.4). 속도 0 에서 제자리걸음 → 오른쪽 무릎이 60–90° 꺾인 채 안 펴짐 |
+| 걷다가·서 있다가 전원 끊김, 재부팅 | 여러 런 (`.json` 빈 파일, `event` 없이 끝남) | 모터 전압 4.58–4.87 V (1초에 모터 하나씩 읽은 평균이라 순간 강하는 안 보임). 시뮬 추정 걷기 전류는 모터만 평균 3–4.5 A, 순간 5–6 A 이상 → 레귤레이터 용량 부족이 유력 |
+
+정리하면 **실물 모터가 시뮬보다 약하고 (5 V 스톨 토크 0.52 Nm vs 시뮬 한계 0.64 Nm, 부하 때 전압 강하), 오른쪽이 더 약하며, 걷는 전류가 레귤레이터에 부담**입니다.
+소프트웨어로 `Microban-Walk-DR2` 를 DR model_1000 에서 1000 iteration 미세조정했습니다 (원격 2048 env, 약 35 분):
+- `no_stepping` −1: 명령이 0 이면 발을 떼지 않기 (mjlab_microban 항목)
+- `motor_current` −0.1/A: Σ|τ|/kt (XL330 kt 0.366 Nm/A)
+- 토크 한계 × 0.6–0.95 (DR 은 0.75–1.0), 정지 명령 20 %
+
+같은 조건 (`Microban-Walk-DR2` 재생, 명령마다 64 env × 10 초; 전류는 32 env × 8 초):
+
+| 정책 | 서 있기 전류 | 걷기 전류 vx 0.1–0.3 (p99) | 기본 | 밀기 | 최악 DR | 밀기 + 최악 | vx 0.1 / 0.2 / 0.3 명령 → 실제 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| DR model_1000 | 3.47 A | 3.66–4.51 A (6.3) | 0 % | 5.1 % | 0.2 % | 30 % | 0.08 / 0.15 / 0.21 |
+| **DR2 model_1400 (최종)** | **0.83 A** | **2.90–3.58 A (5.4)** | **0 %** | **3.5 %** | **0 %** | **17 %** | 0.07 / 0.12 / 0.17 |
+| DR2 model_1999 | 0.87 A | 2.75–3.55 A (5.7) | 0 % | 3.5 % | 0.2 % | 22 % | 0.07 / 0.12 / 0.16 |
+
+- 최종: **`checkpoints/walk_dr2_model_1400.pt`** (원본 `logs/rsl_rl/microban_walk/2026-11-20_10-34-35_dr2/model_1400.pt`), ONNX **`mero_walk/models/mero_walk_dr2.onnx`** (`config.5v.example.json` 기본 정책).
+- 런타임 시뮬 (MuJoCo 플랜트, MERO IMU 장착, 30 Hz, 4.9 V, kp 620/190) 에서 vx 0–0.3 모두 10 초 넘어짐 없음. vx 0.3 에서는 전진이 오히려 줄어 (0.77 m / 10 s) 처음엔 vx ≤ 0.2 권장. 뒤로 걷기는 거의 안 됨 (−0.15 → −0.04 m/s).
+- 하드웨어 쪽 확인: UBEC 정격 전류 (8–10 A 이상 권장, 또는 오렌지파이 전원 분리), 오른쪽 발목 롤·고관절 롤 모터 (로봇을 들어 올려 무부하로 같은 자세를 줬을 때도 오른쪽만 처지면 모터·마찰·혼 문제, 하중에서만 처지면 힘 부족).
+
 ### 실행
 
 ```bash
@@ -598,6 +629,12 @@ uv run python scripts/init_from_walk_onnx.py --template logs/rsl_rl/microban_wal
 
 # 2) 미세조정 (git 없는 PC 에서는 GIT_PYTHON_REFRESH=quiet)
 uv run microban-train Microban-Walk-DR --agent.resume True --agent.load-run walkonnx_init --agent.load-checkpoint model_0.pt
+
+# 3) 저전류 미세조정 (DR model_1000 에서)
+uv run microban-train Microban-Walk-DR2 --agent.resume True --agent.load-run <dr run> --agent.load-checkpoint model_1000.pt
+
+# 걷는 중 피치·모터 전류·관절 추종 (시뮬)
+TASK=Microban-Walk-DR2 uv run python scripts/walk_pitch.py ../checkpoints/walk_dr2_model_1400.pt
 
 # 평가 (밀기 / 최악 DR) + mero_walk 용 ONNX 내보내기
 TASK=Microban-Walk-DR uv run python scripts/export_walk_onnx.py ../checkpoints/walk_dr_model_1000.pt --push --hard
