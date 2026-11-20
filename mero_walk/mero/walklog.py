@@ -7,7 +7,7 @@ Columns: time and state, commands, IMU, all 19 joint angles/velocities (sim conv
 the policy's observation vector and raw action, the joint targets written to the motors,
 battery voltage, read errors and any status message ("event") emitted on that tick.
 The robot can lose power mid-walk, so the files are made durable as they are written: the
-directory entry right away, then the rows every second (fsync on a background thread, so a slow
+directory entry right away, then the rows every 0.3 s (fsync on a background thread, so a slow
 SD card never stalls the control loop).
 """
 from __future__ import annotations
@@ -132,7 +132,7 @@ class WalkLog:
         self._events.clear()
         self.f.write(",".join(_fmt(v) for v in vals) + "\n")
         self.rows += 1
-        if now - self._last_flush > 1.0:
+        if now - self._last_flush > 0.3:     # small loss window if the power cuts out
             self._last_flush = now
             self.f.flush()
             if self._sync is None or not self._sync.is_alive():
