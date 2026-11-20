@@ -1,0 +1,9 @@
+{
+  "_설명": "UBEC 없이 모터를 2S 배터리(7.4–8.4 V)에 바로 연결한 구성 (원본 microban 과 같음, 2026-11-20~). cp config.2s.example.json config.json",
+  "_게인": "런타임 기본값과 같음: 서기 400, 걷기 125 (= walk.onnx·우리 학습의 0.275 Nm/rad). 5V 용 620/190 을 쓰면 1.55배 세져서 안 됨",
+  "control": {"hz": 30, "kp_stand": 400, "kp_walk": 125},
+  "_정책": "저전류 보행 정책 (Microban-Walk-DR2). 약한 모터(5V)~정상(배터리 직결) 범위로 학습해서 이 구성에도 맞음. gyro_frame 은 ONNX 메타데이터(body)에서 자동",
+  "policy": {"path": "models/mero_walk_dr2.onnx"},
+  "_배터리": "모터 입력 전압 = 배터리 전압이라 모터로 재면 됨 (INA219 불필요). 2S 리튬이온 3.5/3.4/3.2 V/셀",
+  "battery": {"source": "motor", "cells": 2, "warn_v": 7.0, "low_v": 6.8, "critical_v": 6.4, "offset_v": 0.0}
+}

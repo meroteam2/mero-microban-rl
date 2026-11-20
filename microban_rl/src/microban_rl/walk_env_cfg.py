@@ -403,3 +403,29 @@ def microban_walk_dr2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg.max_iterations = 1000
   cfg.run_name = "dr2"
   return cfg
+
+
+##
+# Microban-Walk-DR3: DR2 for motors on the 2S pack directly (UBEC removed, 2026-11-20).
+##
+
+
+def microban_walk_dr3_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Microban-Walk-DR2 with the torque limit back near the sim nominal (x0.8..1.0).
+
+  With the 5 V UBEC removed the XL330s run on the 2S pack (7.4-8.4 V) like the upstream
+  microban, so the firmware current limit (1.75 A ~ 0.64 Nm, the sim limit) binds again
+  instead of the 5 V stall torque. Keeps DR2's no_stepping / motor_current terms.
+  """
+  cfg = microban_walk_dr2_env_cfg(play=play)
+  act = cfg.scene.entities["robot"].articulation.actuators[0]
+  assert isinstance(act, BacklashPdActuatorCfg)
+  act.effort_scale_range = (0.8, 1.0)
+  return cfg
+
+
+def microban_walk_dr3_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = microban_walk_dr2_ppo_runner_cfg()
+  cfg.max_iterations = 600
+  cfg.run_name = "dr3"
+  return cfg
