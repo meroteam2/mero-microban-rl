@@ -429,3 +429,72 @@ def microban_walk_dr3_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg.max_iterations = 600
   cfg.run_name = "dr3"
   return cfg
+
+
+##
+# Microban-Walk-DR4: robustness to the sim2real errors found in the real logs (2026-11-23).
+##
+
+IMU_TILT_DR = math.radians(3.0)
+
+
+class imu_tilted:
+  """`func` (projected gravity or trunk gyro) seen through an IMU chip tilted by a random
+  roll/pitch per env (re-drawn at every reset), like a mount_quat calibrated only to 90 deg."""
+
+  def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRlEnv):
+    self.R = torch.eye(3, device=env.device).repeat(env.num_envs, 1, 1)
+    self.max_rad = float(cfg.params.get("max_rad", 0.0))
+    self.reset()
+
+  def __call__(self, env: ManagerBasedRlEnv, func, max_rad: float = 0.0) -> torch.Tensor:
+    return torch.einsum("nij,nj->ni", self.R, func(env))
+
+  def reset(self, env_ids=None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    n = self.R[env_ids].shape[0]
+    if n == 0 or self.max_rad == 0.0:
+      return
+    r, p = (torch.rand(2, n, device=self.R.device) * 2 - 1) * self.max_rad
+    cr, sr, cp, sp = r.cos(), r.sin(), p.cos(), p.sin()
+    o, z = torch.ones_like(r), torch.zeros_like(r)
+    Rx = torch.stack([o, z, z, z, cr, -sr, z, sr, cr], -1).view(n, 3, 3)
+    Ry = torch.stack([cp, z, sp, z, o, z, -sp, z, cp], -1).view(n, 3, 3)
+    self.R[env_ids] = Rx @ Ry
+
+
+def microban_walk_dr4_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Microban-Walk-DR2 widened to the errors the real MERO logs show (README, 2026-11-23).
+
+  Reproducing the real standing logs in the runtime sim needs a ~4 deg left/right mismatch
+  in a leg's pitch chain, an IMU chip tilted ~3 deg in pitch, and the trunk COM 5-8 mm to the
+  right (walking leans right). DR2 covered +-2 deg per joint, +-5 mm COM and no IMU tilt:
+
+  * joint calibration error +-3 deg per joint (3-joint chain: std ~3 deg),
+  * IMU roll/pitch tilt +-3 deg, applied to projected gravity and the gyro (actor only),
+  * trunk COM x/y +-10 mm (z +-5 mm).
+
+  Motors on the 2S pack (UBEC removed for good); DR2's torque range kept (DR3 showed no gain).
+  """
+  cfg = microban_walk_dr2_env_cfg(play=play)
+  act = cfg.scene.entities["robot"].articulation.actuators[0]
+  assert isinstance(act, BacklashPdActuatorCfg)
+  act.offset_range = (-math.radians(3.0), math.radians(3.0))
+  actor = cfg.observations["actor"].terms
+  for name, f in (("base_ang_vel", base_ang_vel_trunk), ("projected_gravity", mdp.projected_gravity)):
+    t = actor[name]
+    actor[name] = ObservationTermCfg(
+      func=imu_tilted, params={"func": f, "max_rad": IMU_TILT_DR}, noise=t.noise,
+      delay_min_lag=t.delay_min_lag, delay_max_lag=t.delay_max_lag,
+      delay_update_period=t.delay_update_period,
+    )
+  cfg.events["base_com"].params["ranges"] = {0: (-0.010, 0.010), 1: (-0.010, 0.010), 2: (-0.005, 0.005)}
+  return cfg
+
+
+def microban_walk_dr4_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = microban_walk_dr2_ppo_runner_cfg()
+  cfg.max_iterations = 1000
+  cfg.run_name = "dr4"
+  return cfg

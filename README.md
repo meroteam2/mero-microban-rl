@@ -9,8 +9,8 @@ PPO(rsl-rl)로 학습하는 환경입니다.
   → [포복 태스크](#포복-태스크-최종-microban-crawl-arms-2), 영상 `~/mero/videos/crawl.mp4`
 - **`Microban-GetUp-5` + walk.onnx (일어나기 → 보행)**: 엎드린 자세에서 키프레임을 참조해 일어난 뒤 microban 의 walk.onnx 로 걷기
   → [일어나기 → 보행](#일어나기--보행-최종-microban-getup-5-model_2500--walkonnx), 영상 `~/mero/videos/getup_walk.mp4`
-- **`Microban-Walk-DR2` (실물 MERO 보행)**: walk.onnx 로 actor 를 초기화하고 30 Hz·5 V 게인·바닥 DR·기어 백래시 환경에서 미세조정한 뒤, 실물 로그 분석에 따라 저전류로 다시 미세조정
-  → [보행](#보행-최종-microban-walk-dr-walkonnx-초기화--미세조정), ONNX `mero_walk/models/mero_walk_dr2.onnx`
+- **`Microban-Walk-DR4` (실물 MERO 보행)**: walk.onnx 로 actor 를 초기화하고 30 Hz·바닥 DR·기어 백래시 환경에서 미세조정 → 저전류 미세조정 (DR2) → 실물 로그에서 찾은 캘리브레이션·IMU 장착·무게중심 오차까지 덮도록 DR 을 넓혀 다시 미세조정
+  → [보행](#보행-최종-microban-walk-dr-walkonnx-초기화--미세조정), ONNX `mero_walk/models/mero_walk_dr4.onnx`
 
 ## 폴더 구조
 
@@ -615,10 +615,50 @@ model_1000 속도 추종 (기본 조건, 뒤 2/3 평균):
 
 - 최종: **`checkpoints/walk_dr2_model_1400.pt`** (원본 `logs/rsl_rl/microban_walk/2026-11-20_10-34-35_dr2/model_1400.pt`), ONNX **`mero_walk/models/mero_walk_dr2.onnx`** (`config.5v.example.json` 기본 정책).
 - 런타임 시뮬 (MuJoCo 플랜트, MERO IMU 장착, 30 Hz, 4.9 V, kp 620/190) 에서 vx 0–0.3 모두 10 초 넘어짐 없음. vx 0.3 에서는 전진이 오히려 줄어 (0.77 m / 10 s) 처음엔 vx ≤ 0.2 권장. 뒤로 걷기는 거의 안 됨 (−0.15 → −0.04 m/s).
-- **UBEC 제거 (2026-11-20 오후): 모터를 2S 배터리에 직결** → `mero_walk/config.2s.example.json` (kp 400/125, 30 Hz, 정책 `mero_walk_dr2.onnx`).
+- **UBEC 제거 (2026-11-20 오후): 모터를 2S 배터리에 직결** → `mero_walk/config.2s.example.json` (kp 400/125, 30 Hz, 정책 `mero_walk_dr2.onnx`, 2026-11-23 부터 `mero_walk_dr4.onnx`).
   런타임 시뮬 7.6 V·kp 400/125 에서 walk.onnx·DR·DR2 모두 vx 0–0.3 10 초 넘어짐 없음.
   배터리 직결용으로 토크 한계를 ×0.8–1.0 으로 되돌린 `Microban-Walk-DR3` (DR2 model_1400 에서 600 it) 도 시험했지만, 같은 조건에서 속도·전류는 같고 약한 모터 (최악 DR) 넘어짐만 늘어 (model_1700 1.2 %, model_1999 11.5 % vs DR2 0 %) 채택하지 않음.
+- ⚠ 위 표의 "원인" 중 발목·무릎·롤 관절이 처진다는 해석은 2026-11-23 재분석에서 **틀린 것으로 확인됨** (아래 DR4 절).
 - 하드웨어 쪽 확인 (5 V 구성 때): UBEC 정격 전류 (8–10 A 이상 권장, 또는 오렌지파이 전원 분리), 오른쪽 발목 롤·고관절 롤 모터 (로봇을 들어 올려 무부하로 같은 자세를 줬을 때도 오른쪽만 처지면 모터·마찰·혼 문제, 하중에서만 처지면 힘 부족).
+
+### 실물 로그 재분석과 오차에 강한 정책 (`Microban-Walk-DR4`, 2026-11-23)
+
+실제 런타임을 MuJoCo 플랜트에 물린 하네스 (`mero_walk/mero/sim/harness.py`, 5 V·kp 620/190) 로 실물과 같은 걷기 로그를 만들어 비교:
+
+- **"오른쪽 다리 처짐" 은 walk.onnx 의 정상 동작.** 오차 없는 시뮬에서도 서 있을 때 목표각이 좌우 비대칭이고 (오른발목 피치 +6°, 왼무릎 −12°), 발이 바닥에 막혀 오른발목 피치가 목표보다 −8° 입니다 (실물 −8 ~ −13°). 걸을 때 추종 오차 30–80° 도 시뮬과 같은 수준. 모터·혼 교체 근거 없음.
+- 실물과 시뮬의 진짜 차이는 순기구학으로 보입니다. 두 발이 바닥에 붙어 있으면 왼발 기준·오른발 기준·IMU 의 몸통 기울기가 같아야 합니다:
+
+| 서 있을 때 앞 기울기 | IMU | 왼발 FK | 오른발 FK |
+| --- | ---: | ---: | ---: |
+| 시뮬 (오차 없음) | 12.6° | 12.6° | 12.6° |
+| 실물 `082346` / `081758` | 19.8° / 19.1° | 17.2° / 16.3° | 14.7° / 12.8° |
+| 시뮬 + 오른발목 피치 원점 −4°, IMU 피치 +3°, 무게중심 오른쪽 5 mm | 19.3° | 16.3° | 12.2° |
+
+  1. 좌우 다리 피치 체인 캘리브레이션 차이 ~4° (어느 관절인지는 구분 불가, 롤도 ~2°). 수상한 원점: `left_ankle_pitch` −16.2°, `right_hip_roll` −12°, `right_ankle_roll` +3°.
+  2. IMU 칩 피치 기울기 ~3° (`mount_quat` 를 90° 단위로만 맞춤).
+  3. 몸통 무게중심 오른쪽 5–8 mm: 서 있을 때는 안 보이고 걸을 때 오른쪽으로 기욺 (시뮬 5 mm → 평균 +5.9°, 8 mm → +7.1°; 실물 +6 ~ +10°).
+- 시뮬에서 고정 서기 자세는 일부 캘리브레이션 오차나 모터 전압 ≤ 4.7 V 에서 뒤로 넘어집니다 (정책이 아니라 서기 단계).
+
+`Microban-Walk-DR4` = DR2 + 관절 원점 오차 ±3° (DR2 ±2°), IMU 롤·피치 기울기 ±3° (새로 추가, `imu_tilted` 관측 항, 리셋마다 다시 뽑음; 자이로·중력 둘 다), 몸통 무게중심 x·y ±10 mm (DR2 ±5 mm). DR2 model_1400 에서 1000 iteration (원격 4096 env, 약 17 분). UBEC 제거 확정이라 2S 기준.
+
+| `Microban-Walk-DR4` 재생 (명령마다 128 env × 10 초) | 기본 | 밀기 | DR2 조건 밀기 | vx 0.1 / 0.2 / 0.3 → 실제 |
+| --- | ---: | ---: | ---: | --- |
+| DR2 model_1400 | 0.3 % | 11.6 % | 3.5 % | 0.068 / 0.116 / 0.158 |
+| **DR4 model_2000 (최종)** | **0 %** | **5.3 %** | **1.2 %** | 0.056 / 0.112 / 0.156 |
+| DR4 model_2399 | 0 % | 6.6 % | 2.0 % | 0.055 / 0.112 / 0.156 |
+
+런타임 시뮬 (7.6 V, kp 400/125, 서기 단계에는 몸통을 잡아 둠), vx 0.2 로 걸을 때 오른쪽 기울기 평균 (최대):
+
+| 오차 조합 | DR2 | DR4 |
+| --- | ---: | ---: |
+| 실물 재현 (오른발목 피치 −4°, IMU +3°, 무게중심 오른쪽 5 mm) | +7.7° (10.2) | **+1.7° (5.2)** |
+| 무게중심 오른쪽 8 mm | +8.7° (11.0) | **+4.6° (7.9)** |
+| 오른무릎 −4°, 왼발목 롤 +2°, IMU (3°, 2°), 무게중심 앞 8·오른쪽 8 mm | −2.9° (5.2) | +1.3° (5.6) |
+
+- 최종: **`checkpoints/walk_dr4_model_2000.pt`** (원본 `logs/rsl_rl/microban_walk/2026-11-23_12-38-28_dr4/model_2000.pt`), ONNX **`mero_walk/models/mero_walk_dr4.onnx`** (`config.2s.example.json` 기본 정책).
+- **주의: 정지 상태에서 vx 0.1 로는 출발하지 못함** (오차 없는 시뮬에서 발을 안 뗌; 실물 재현 오차에서는 0.061 m/s). vx 0.15 이상이면 모든 조건에서 출발하고, 걷기 시작한 뒤에는 0.1 로 낮춰도 계속 걷습니다.
+- DR2 는 런타임 시뮬에서 vx 0.3 명령에 오히려 뒤로 갔지만 (−0.09 m/s), DR4 는 0.17 m/s.
+- 정책이 오차를 견뎌도 캘리브레이션 (평평한 판에 두 발을 붙인 채 다리 원점, 수평대에서 IMU 장착) 은 다시 잡는 것을 권장.
 
 ### 실행
 
@@ -635,6 +675,11 @@ uv run microban-train Microban-Walk-DR --agent.resume True --agent.load-run walk
 
 # 3) 저전류 미세조정 (DR model_1000 에서)
 uv run microban-train Microban-Walk-DR2 --agent.resume True --agent.load-run <dr run> --agent.load-checkpoint model_1000.pt
+
+# 4) 캘리브레이션·IMU·무게중심 오차에 강하게 (DR2 model_1400 에서)
+uv run microban-train Microban-Walk-DR4 --agent.resume True --agent.load-run <dr2 run> --agent.load-checkpoint model_1400.pt
+TASK=Microban-Walk-DR4 uv run python scripts/export_walk_onnx.py ../checkpoints/walk_dr4_model_2000.pt --push --envs-per-command 128 \
+    --out ../mero_walk/models/mero_walk_dr4.onnx
 
 # 걷는 중 피치·모터 전류·관절 추종 (시뮬)
 TASK=Microban-Walk-DR2 uv run python scripts/walk_pitch.py ../checkpoints/walk_dr2_model_1400.pt
